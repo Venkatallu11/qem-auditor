@@ -173,6 +173,65 @@ study that later disowned the number.
 python run_benchmarks.py    # non-zero exit if any case audits wrongly
 ```
 
+### Scoring an auditor, not an experiment
+
+`run_benchmarks.py` pins qem-auditor's verdicts against themselves. That
+is a useful regression test and it is circular as evidence: it shows the
+auditor is stable, not that it discriminates. `qem_auditor.trust` points
+the other way — it takes *any* auditor (this package's, a competitor's,
+an LLM's, a person's) and scores it on the same six records.
+
+```bash
+python run_trust.py    # this package, plus the constant baselines
+```
+
+Three things make the score mean something:
+
+**Errors are not symmetric, so accuracy is not the metric.** Condemning a
+sound result wastes someone's month. Certifying an artifact puts a wrong
+number into the literature. The report names those separately, and one of
+them — endorsing a result the suite knows to be broken — disqualifies on
+its own, at any aggregate score. That is the hard-gate rule from
+`verdict.py` turned on the auditor itself.
+
+**Hedging scores zero by construction, not by disapproval.** The headline
+number is not credit; it is credit measured against the best a *constant*
+answer achieves on the same suite. An auditor that replies `NOT
+ESTABLISHED` to everything is never dangerously wrong and still scores
+`-0.029`. So does every other constant answer, by definition.
+
+**The suite reports its own resolution.** Six cases cannot support "94%
+accurate". Every report carries the Wilson interval on its own exact-match
+rate: six for six is `[0.61, 1.00]` — consistent with being wrong a third
+of the time. The top grade is named `SUITE SATURATED` rather than
+anything flattering, because a perfect score on six cases is a statement
+about the suite's resolution, not the auditor's reliability.
+
+```
+  exact          6/6   95% CI [0.61, 1.00]
+  credit         1.000
+  best constant  0.433 (always INVALID)
+  SKILL          +1.000
+  attribution    5/5 causes named correctly
+  GRADE: SUITE SATURATED (this suite cannot resolve further)
+```
+
+Verdict and diagnosis are scored on separate axes. An auditor that stops
+a bad result for the wrong reason still stopped it, and folding the two
+together would let a good diagnosis mask a false endorsement.
+
+Scoring your own auditor is four lines:
+
+```python
+from qem_auditor.trust import Answer, score
+from benchmarks.suite import CASES
+
+def my_auditor(experiment):        # sees the record, never the answer key
+    return Answer(my_verdict_for(experiment))
+
+score(my_auditor, CASES, "mine").print_report()
+```
+
 ---
 
 ## The loop
@@ -478,7 +537,7 @@ qem_auditor/
   schema.py         the experiment record
   record.py         read/write records as JSON
   integrity.py      is this record even readable?
-  gates.py          14 gates, each from a real disqualification
+  gates.py          15 gates, each from a real disqualification
   verdict.py        gate results -> one of 8 verdicts
   failure_modes.py  why it failed, and the cheapest fix
   adversary.py      generates falsification experiments
@@ -493,20 +552,23 @@ qem_auditor/
   claim.py          what has been shown, what has not, what closes the gap
   agent.py          the loop, running by itself
   llm.py            provider-agnostic model access (optional)
+  trust.py          scores an AUDITOR: skill, and one disqualifying error
   report.py         console and self-contained HTML reports
   frontdoor.py      bring a circuit, get a verdict
   api.py / cli.py   the entry points
   adapters/         execute controls instead of trusting them (needs qiskit)
     sources.py      where expectation values come from: noiseless, or Aer noise
 benchmarks/         6 real QEM-Trust cases
-examples/           4 runnable end-to-end demonstrations
-tests/              407 tests
+  suite.py          the same cases, scoreable by any auditor
+examples/           5 runnable end-to-end demonstrations
+tests/              474 tests
 ```
 
 Run it:
 
 ```bash
 python run_benchmarks.py                    # the 6 real cases
+python run_trust.py                         # score auditors against them
 python run_audit_loop.py                    # the closed loop on real history
 python examples/attack_a_pipeline.py        # genuine vs flexible (no qiskit)
 python examples/verify_zne_claim.py         # end-to-end verification (qiskit)
