@@ -168,6 +168,54 @@ six attacks of which two are non-diagnostic has told you something useful
 about itself, and hiding that would make the auditor's own behaviour
 unauditable.
 
+### Attacking your own fitting code
+
+Three of the nine transformations need something only the claimant has:
+the ability to refit. Implement three methods and they become executable.
+
+```python
+class MyPipeline:
+    def fit(self, data): ...                  # your correction model
+    def reconstruct(self, fit, data): ...     # the quantity you claim
+    def goodness_of_fit(self, fit, data): ... # chi2/dof; lower is better
+
+auditor.run_attacks(exp, reconstructor=MyPipeline(), fit_data=data)
+```
+
+The auditor never looks inside your fit. It corrupts the **data** going in
+and watches whether the model noticed:
+
+| attack | what it does | falsifies your claim if |
+|---|---|---|
+| `T_label` | permutes labels within each (slot, draw) | the shuffled fit is about as good |
+| `T_sign` | negates every measured value | the model fits the negation as well |
+| `T_shot` | resamples shot noise vs. subsamples your own MC draws | your own sampling dominates |
+
+**Why goodness-of-fit and not accuracy.** The auditor does not have the
+true answer, and should not be trusted with it if it did. What it can do
+is destroy real structure while leaving the model's flexibility intact and
+ask whether the model noticed. That comparison needs no ground truth,
+which is exactly why it can be trusted.
+
+`examples/attack_a_pipeline.py` runs two pipelines that look equally good
+— and the over-parameterised one looks *better*, at `chi2/dof = 0`:
+
+```
+GENUINE  (per-label scale)     chi2/dof 1.03
+  [SURVIVED ] T_label   1.03 -> 531 (515x worse when shuffled)
+
+FLEXIBLE (per-measurement)     chi2/dof 0.00
+  [FALSIFIED] T_label   0 -> 0 (1.0x -- absorbs shuffled data as readily)
+```
+
+Fit quality alone would have picked the wrong one.
+
+**A limitation found by testing, not reasoned about in advance**: with only
+**two** labels there is one non-identity permutation, so every group gets
+the same swap — a systematic relabelling that any model with one free
+parameter per label absorbs exactly. The attack reports *cannot judge*
+rather than a pass. Three or more labels are needed.
+
 ### The failure grammar
 
 Nine transformations, each from a failure this project actually suffered,
@@ -482,10 +530,11 @@ shot noise was 0.0037 against the method's own Monte Carlo at 2.11.
   models, and seed perturbations itself, rather than checking that a
   human ran them. The gates already encode what must be survived; what
   is missing is a proposer.
-- **More executable attacks**: six of the nine transformations still need
-  a domain hook (the claimant's own fitting code). `T_label`, `T_sign` and
-  `T_shot` are the tractable next three — they need a fit-and-reconstruct
-  interface the schema does not yet define.
+- **The last three transformations**: `T_calibration`, `T_leakage` and
+  `T_correlation` still need domain hooks. Calibration needs the
+  claimant's noise model rather than just their fit; leakage needs their
+  free parameters; correlation needs their structural assumption stated in
+  a form that can be dropped.
 - **Noisy-backend adapters**: the Qiskit adapter uses exact statevectors
   plus sampled shot noise, which is what the ideal control needs. Running
   claims against Aer noise models, IBM, or Quantinuum is the same

@@ -221,6 +221,10 @@ class Auditor:
                     hooks: dict | None = None, **artifacts) -> AttackReport:
         """Execute the attacks that can be run, and record what they found.
 
+        Pass `reconstructor=` and `fit_data=` to enable the fit-based
+        attacks (T_label, T_sign, T_shot). They need no backend adapter --
+        only your own fitting code behind the Reconstructor interface.
+
         Findings are written back onto the record with MEASURED
         provenance, so the verdict afterwards reflects what the auditor
         established rather than what it was told.

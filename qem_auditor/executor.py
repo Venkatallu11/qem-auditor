@@ -18,6 +18,16 @@ from typing import Any, Callable, Optional
 
 from .adversary import Attack, AttackPlan
 from .adapters.base import ControlMeasurement, MeasurementError
+from .reconstruct import (
+    ReconstructionError,
+    compare_fit,
+    shuffle_is_diagnostic,
+    flip_sign,
+    reconstruction_spread,
+    resample_shots,
+    shuffle_labels,
+    subsample_draws,
+)
 from .schema import Experiment
 
 
@@ -123,7 +133,11 @@ class AttackExecutor:
                 attack, False,
                 detail=f"no generic executor for {attack.transformation}; supply a hook "
                        f"with the claimant's own code")
-        if self.adapter is None:
+        # Only the circuit-level attacks need a backend adapter. The
+        # fit-based ones (T_label, T_sign, T_shot) need the claimant's
+        # reconstructor instead, and demanding an adapter for those would
+        # report them unrunnable when they are perfectly runnable.
+        if attack.transformation in _NEEDS_ADAPTER and self.adapter is None:
             return AttackOutcome(attack, False,
                                  detail="needs a backend adapter to execute")
         try:
@@ -141,6 +155,9 @@ def _run_composed_impl(ex: "AttackExecutor", exp: Experiment, attack: Attack,
         if runner is None:
             return AttackOutcome(attack, False,
                                  detail=f"composed attack needs an executor for {name}")
+        if name in _NEEDS_ADAPTER and ex.adapter is None:
+            return AttackOutcome(attack, False,
+                                 detail=f"{name} needs a backend adapter to execute")
         sub = runner(ex, exp, attack, artifacts)
         if not sub.ran:
             return AttackOutcome(attack, False,
@@ -190,7 +207,139 @@ def _run_seed(ex: AttackExecutor, exp: Experiment, attack: Attack,
 
 AttackExecutor._run_composed = _run_composed_impl  # type: ignore[attr-defined]
 
+def _reconstruction_artifacts(artifacts: dict):
+    """The pair every fit-based attack needs, or a reason it cannot run."""
+    reconstructor = artifacts.get("reconstructor")
+    data = artifacts.get("fit_data")
+    if reconstructor is None or data is None:
+        return None, None, ("needs `reconstructor` and `fit_data` -- implement "
+                            "qem_auditor.reconstruct.Reconstructor over your own "
+                            "fitting code")
+    return reconstructor, data, ""
+
+
+def _run_label(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+               artifacts: dict) -> AttackOutcome:
+    """Shuffle labels within each slot, refit, and see whether the model
+    noticed. A model that fits shuffled data as well as real data has not
+    learned the physics."""
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    diagnostic, why = shuffle_is_diagnostic(data)
+    if not diagnostic:
+        return AttackOutcome(attack, False, detail=f"cannot judge: {why}")
+    threshold = float(artifacts.get("label_min_ratio", 5.0))
+    try:
+        comparison = compare_fit(reconstructor, data,
+                                 shuffle_labels(data, artifacts.get("seed", 0)))
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=str(e))
+    genuine = comparison.ratio >= threshold
+    return AttackOutcome(
+        attack, True, matched="genuine" if genuine else "artifact",
+        detail=(f"{comparison.detail}; " + (
+            f"the shuffled fit is {comparison.ratio:.1f}x worse, so the model is "
+            f"using the label correspondence"
+            if genuine else
+            f"the shuffled fit is comparable (needed {threshold:.0f}x) -- the model "
+            f"absorbs shuffled data as readily as real data, so its agreement with "
+            f"the real data was never evidence")))
+
+
+def _run_sign(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+              artifacts: dict) -> AttackOutcome:
+    """Negate every measured value and refit. A correction that encodes a
+    direction should fit the negation far worse."""
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    threshold = float(artifacts.get("sign_min_ratio", 5.0))
+    try:
+        comparison = compare_fit(reconstructor, data, flip_sign(data))
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=str(e))
+    genuine = comparison.ratio >= threshold
+    return AttackOutcome(
+        attack, True, matched="genuine" if genuine else "artifact",
+        detail=(f"{comparison.detail}; " + (
+            "the sign-flipped fit is much worse, so the correction is directional"
+            if genuine else
+            "the model fits negated data about as well -- it is flexible enough to "
+            "explain either direction, so it is not encoding a physical sign")))
+
+
+def _run_shot(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+              artifacts: dict) -> AttackOutcome:
+    """Which knob actually moves the answer: the data's shot noise, or the
+    method's own Monte Carlo draws?
+
+    The prediction is deliberately not about magnitude but about WHICH
+    dominates. In this project's measured budget the method's own sampling
+    beat shot noise by ~570x, and a study that only resampled shots
+    concluded more shots were the answer.
+    """
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    trials = int(artifacts.get("shot_trials", 8))
+    try:
+        _, shot_spread = reconstruction_spread(
+            reconstructor, data,
+            lambda d, t: resample_shots(d, seed=t), trials=trials)
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=f"shot resampling: {e}")
+
+    draws = data.draws
+    if len(draws) < 2:
+        return AttackOutcome(
+            attack, False,
+            detail=(f"only {len(draws)} method draw(s) recorded, so the method's own "
+                    f"sampling cannot be varied -- tag measurements with `draw` to "
+                    f"make this comparison possible"))
+    keep = max(1, len(draws) // 2)
+    try:
+        _, draw_spread = reconstruction_spread(
+            reconstructor, data,
+            lambda d, t: subsample_draws(d, keep, seed=t), trials=trials)
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=f"draw subsampling: {e}")
+
+    # Both spreads at zero means the reconstruction did not respond to
+    # either knob, which is not evidence that shots dominate -- it is
+    # evidence the comparison could not be made. Reporting it as a pass
+    # would be exactly the "silence counts as a pass" error the gates
+    # exist to prevent.
+    scale = max(abs(shot_spread), abs(draw_spread))
+    if scale <= 1e-12:
+        return AttackOutcome(
+            attack, False,
+            detail=(f"the reconstruction did not move under either perturbation "
+                    f"(shot spread {shot_spread:.3g}, draw spread {draw_spread:.3g}) "
+                    f"-- nothing can be concluded about which term dominates. A "
+                    f"reconstruction insensitive to its own input is worth "
+                    f"investigating on its own account."))
+
+    shots_dominate = shot_spread >= draw_spread
+    ratio = (draw_spread / shot_spread) if shot_spread > 0 else float("inf")
+    return AttackOutcome(
+        attack, True, matched="genuine" if shots_dominate else "artifact",
+        detail=(f"spread from shot noise {shot_spread:.6g}, from the method's own "
+                f"draws {draw_spread:.6g} ({ratio:.1f}x); " + (
+                    "shot noise dominates, so more shots is the right lever"
+                    if shots_dominate else
+                    "the method's own sampling dominates -- more shots would address "
+                    "the smaller term while the real lever goes untouched")))
+
+
+# Which runners talk to a quantum backend, as opposed to the claimant's
+# own fitting code.
+_NEEDS_ADAPTER = frozenset({"T_compiler", "T_extrapolation", "T_seed"})
+
 _RUNNERS = {
+    "T_label": _run_label,
+    "T_sign": _run_sign,
+    "T_shot": _run_shot,
     "T_compiler": _run_compiler,
     "T_extrapolation": _run_extrapolation,
     "T_seed": _run_seed,

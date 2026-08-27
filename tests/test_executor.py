@@ -142,3 +142,118 @@ class RealExecutionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FitBasedAttackTest(unittest.TestCase):
+    """T_label, T_sign and T_shot, now executable through a reconstructor."""
+
+    def _pieces(self):
+        from statistics import mean
+
+        from qem_auditor.reconstruct import FitData, Measurement
+
+        ideal = {"XX": 0.8, "YY": -0.6, "ZZ": 0.4}
+
+        data = FitData([
+            Measurement(slot=slot, label=label, value=v * 0.9 + 0.001 * (d + 1),
+                        sigma=0.01, shots=1000, draw=d)
+            for d in range(4) for slot in ("u0", "u1")
+            for label, v in ideal.items()])
+
+        class Genuine:
+            def fit(self, data):
+                return {lab: mean([m.value for m in data.measurements
+                                   if m.label == lab]) / v
+                        for lab, v in ideal.items()}
+
+            def reconstruct(self, fit, data):
+                return sum(mean([m.value for m in data.measurements if m.label == lab])
+                           / (fit.get(lab) or 1.0) for lab in ideal)
+
+            def goodness_of_fit(self, fit, data):
+                return sum(((m.value - ideal[m.label] * fit[m.label]) / m.sigma) ** 2
+                           for m in data.measurements) / len(data.measurements)
+
+        class Flexible:
+            def fit(self, data):
+                return {(m.slot, m.label, m.draw): m.value for m in data.measurements}
+
+            def reconstruct(self, fit, data):
+                return sum(fit.values())
+
+            def goodness_of_fit(self, fit, data):
+                return 0.0
+
+        return data, Genuine(), Flexible()
+
+    def _run(self, name, reconstructor, data, **extra):
+        from qem_auditor.adversary import AttackPlan, GRAMMAR
+
+        exp = make_experiment()
+        plan = AttackPlan(exp.experiment_id, [GRAMMAR[name](exp)])
+        report = AttackExecutor().run(exp, plan, reconstructor=reconstructor,
+                                      fit_data=data, **extra)
+        return report.outcomes[0]
+
+    def test_they_need_no_backend_adapter(self):
+        """They need the claimant's fitting code, not a quantum backend."""
+        data, genuine, _ = self._pieces()
+        self.assertTrue(self._run("T_label", genuine, data).ran)
+
+    def test_label_shuffle_separates_genuine_from_flexible(self):
+        data, genuine, flexible = self._pieces()
+        self.assertIs(self._run("T_label", genuine, data).survived, True)
+        self.assertIs(self._run("T_label", flexible, data).survived, False)
+
+    def test_a_flexible_model_is_falsified_by_the_sign_flip(self):
+        data, _, flexible = self._pieces()
+        self.assertIs(self._run("T_sign", flexible, data).survived, False)
+
+    def test_missing_artifacts_are_reported_not_passed(self):
+        from qem_auditor.adversary import AttackPlan, GRAMMAR
+
+        exp = make_experiment()
+        for name in ("T_label", "T_sign", "T_shot"):
+            with self.subTest(attack=name):
+                plan = AttackPlan(exp.experiment_id, [GRAMMAR[name](exp)])
+                outcome = AttackExecutor().run(exp, plan).outcomes[0]
+                self.assertIsNone(outcome.survived)
+                self.assertIn("reconstructor", outcome.detail)
+
+    def test_a_two_label_dataset_cannot_judge_rather_than_passing(self):
+        from qem_auditor.reconstruct import FitData, Measurement
+
+        data, genuine, _ = self._pieces()
+        two = FitData([m for m in data.measurements if m.label in ("XX", "YY")])
+        outcome = self._run("T_label", genuine, two)
+        self.assertIsNone(outcome.survived)
+        self.assertIn("cannot judge", outcome.detail)
+
+    def test_shot_attack_needs_more_than_one_draw(self):
+        from qem_auditor.reconstruct import FitData
+
+        data, genuine, _ = self._pieces()
+        one = FitData([m for m in data.measurements if m.draw == 0])
+        outcome = self._run("T_shot", genuine, one)
+        self.assertIsNone(outcome.survived)
+        self.assertIn("draw", outcome.detail)
+
+    def test_an_unresponsive_reconstruction_cannot_judge(self):
+        """Zero spread under both knobs is not evidence that shots dominate."""
+        from qem_auditor.reconstruct import FitData
+
+        data, _, _ = self._pieces()
+
+        class Constant:
+            def fit(self, data):
+                return {}
+
+            def reconstruct(self, fit, data):
+                return 1.0
+
+            def goodness_of_fit(self, fit, data):
+                return 1.0
+
+        outcome = self._run("T_shot", Constant(), data)
+        self.assertIsNone(outcome.survived)
+        self.assertIn("did not move", outcome.detail)
