@@ -23,6 +23,14 @@ jobs:
       - run: python run_benchmarks.py
       - run: python run_audit_loop.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
+      # Every CLI subcommand, so a broken entry point fails here rather
+      # than for whoever runs it. `attack` and `blind` exit non-zero by
+      # design on an unproven record, so assert the code rather than the
+      # absence of one.
+      - run: |
+          qem-auditor audit /tmp/t.json; test $? -eq 1
+          qem-auditor attack /tmp/t.json; test $? -eq 1
+          qem-auditor blind /tmp/t.json; test $? -eq 0
 
   adapters:
     name: adapters (qiskit)
@@ -35,3 +43,4 @@ jobs:
       - run: pip install -e ".[adapters]"
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
+      - run: python examples/adversarial_loop.py
