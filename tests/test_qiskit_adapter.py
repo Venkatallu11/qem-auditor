@@ -136,8 +136,36 @@ class IdealControlTest(unittest.TestCase):
         m = QiskitAdapter(seed=3).measure_ideal_control(
             _base(), SparsePauliOp("ZZ"),
             lambda e: e(_base(), SparsePauliOp("ZZ")), shots=20_000)
-        for key in ("exact", "raw", "mitigated", "raw_error", "mitigated_error", "shots"):
+        for key in ("exact", "raw_error", "mitigated_error", "amplification",
+                    "shots", "trials", "statistic"):
             self.assertIn(key, m.evidence)
+        # The statistic is named, because a median over paired trials and a
+        # single draw are different claims and the reader must not have to
+        # guess which one this is.
+        self.assertIn("median", m.evidence["statistic"])
+
+    def test_the_amplification_is_stable_across_shot_counts(self):
+        """A single-draw ratio is not: it once reported 43x for an
+        estimator whose true amplification is about 4.4x."""
+        adapter = QiskitAdapter(seed=3)
+        obs = SparsePauliOp("ZZ")
+
+        def zne(expectation):
+            v = [expectation(_folded(_base(), f), obs) for f in (0, 1, 2)]
+            return 3 * v[0] - 3 * v[1] + v[2]
+
+        low = adapter.measure_ideal_control(_base(), obs, zne, shots=20_000)
+        high = adapter.measure_ideal_control(_base(), obs, zne, shots=200_000)
+        self.assertAlmostEqual(low.evidence["amplification"],
+                               high.evidence["amplification"], delta=1.5)
+
+    def test_a_single_trial_is_refused(self):
+        from qem_auditor.adapters.base import MeasurementError
+
+        with self.assertRaises(MeasurementError):
+            QiskitAdapter().measure_ideal_control(
+                _base(), SparsePauliOp("ZZ"),
+                lambda e: e(_base(), SparsePauliOp("ZZ")), trials=1)
 
 
 @unittest.skipUnless(HAVE_QISKIT, "qiskit not installed")

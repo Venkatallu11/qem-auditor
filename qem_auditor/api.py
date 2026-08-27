@@ -207,6 +207,15 @@ class Auditor:
                 self.verify_determinism(exp, oracle_free, runs=3)
             except Exception:
                 pass
+            # Only meaningful with a noisy source; harmlessly skipped
+            # otherwise, and reported as unrun rather than as passed.
+            if not getattr(self.adapter.source, "is_noiseless", True):
+                try:
+                    self.verify_mitigation_benefit(
+                        exp, inputs.circuit, inputs.observable, inputs.mitigator,
+                        shots=inputs.shots)
+                except Exception:
+                    pass
 
     def attack(self, experiment: Experiment | str | Path | dict) -> AttackPlan:
         """Propose falsification experiments for a claim.
@@ -282,6 +291,17 @@ class Auditor:
         """Run the claimant's mitigation against a noiseless model."""
         return self._apply(exp, self._require_adapter()
                            .measure_ideal_control(circuit, observable, mitigator, **kwargs))
+
+    def verify_mitigation_benefit(self, exp: Experiment, circuit, observable,
+                                  mitigator, **kwargs) -> ControlMeasurement:
+        """Under real device noise, does the mitigation reduce the error?
+
+        Needs an adapter built with a noisy source, e.g.
+        QiskitAdapter(source=AerNoiseSource(noise_model)).
+        """
+        return self._apply(exp, self._require_adapter()
+                           .measure_mitigation_benefit(circuit, observable,
+                                                       mitigator, **kwargs))
 
     def verify_determinism(self, exp: Experiment, computation, **kwargs) -> ControlMeasurement:
         """Run the identical computation repeatedly and diff the results."""

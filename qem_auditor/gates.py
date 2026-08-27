@@ -374,6 +374,34 @@ def improvement_gate(exp: Experiment, min_ratio: float = 1.0) -> GateResult:
 AUDITOR_VERIFIABLE = ("unitary_equivalence", "ideal_control", "determinism_check")
 
 
+def mitigation_benefit_gate(exp: Experiment) -> GateResult:
+    """Does the mitigation help once there is noise to correct?
+
+    Deliberately NOT a hard gate. A method that fails to help under one
+    noise model has not been shown to be broken -- it may be aimed at a
+    different noise regime, or the model may be unrepresentative. But it
+    has also not been shown to work, so certification waits.
+
+    The pairing matters: ideal_control and this gate ask opposite
+    questions, and passing one says nothing about the other. A no-op
+    mitigator passes the ideal control trivially -- it cannot amplify
+    noise it never touches -- and fails this one.
+    """
+    mb = exp.controls.mitigation_benefit
+    if mb is None:
+        return GateResult("mitigation_benefit", None,
+                          "not yet run: whether mitigation helps under real noise is "
+                          "untested")
+    if mb is False:
+        return GateResult("mitigation_benefit", False,
+                          "under a real noise model the mitigation did not reduce the "
+                          "error -- passing the ideal control shows only that it does "
+                          "not break without noise",
+                          [FailureMode.UNDER_POWERED, FailureMode.UNKNOWN])
+    return GateResult("mitigation_benefit", True,
+                      "the mitigation measurably reduces the error under real noise")
+
+
 def independent_verification_gate(exp: Experiment) -> GateResult:
     """How much of this record did the auditor check for itself?
 
@@ -421,6 +449,7 @@ ALL_GATES = [
     reproducibility_gate,
     tail_risk_gate,
     evidence_scope_gate,
+    mitigation_benefit_gate,
     independent_verification_gate,
     chemical_accuracy_gate,
     improvement_gate,

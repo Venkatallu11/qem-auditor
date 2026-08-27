@@ -383,6 +383,47 @@ an unset `PYTHONHASHSEED` and a dirty working tree.
 Stated plainly: these are content hashes, **not signatures**. They detect
 change; they do not authenticate.
 
+### Running under real device noise
+
+The expectation source is the pluggable piece, so adding a backend is a
+new source rather than a new adapter:
+
+```python
+from qem_auditor.adapters.qiskit_adapter import QiskitAdapter
+from qem_auditor.adapters.sources import AerNoiseSource
+
+auditor = Auditor(adapter=QiskitAdapter(source=AerNoiseSource(noise_model)))
+```
+
+That unlocks a control the noiseless path structurally cannot run:
+
+| | asks |
+|---|---|
+| `ideal_control` | does this method **break** when there is no noise? |
+| `mitigation_benefit` | does it **help** when there is? |
+
+Passing one says nothing about the other. A do-nothing mitigator clears
+the ideal control trivially — it cannot amplify noise it never touches —
+and fails the benefit check outright. `examples/check_under_noise.py`
+shows exactly that: both pass the ideal control, only one does anything.
+
+**Two invariants worth knowing.**
+
+The ideal control always runs **noiseless**, whatever source the adapter
+was built with. Its entire content is "does this break with no noise to
+correct", and running it through device noise would quietly turn it into a
+different, much weaker check.
+
+And `AerNoiseSource` verifies the noise actually took effect before
+returning anything. Aer's `method="automatic"` silently returns a pure
+state even with a noise model attached, as does a model whose basis the
+circuit never hits — either way the numbers come back noiseless and
+labelled noisy. Failing loudly is better.
+
+`mitigation_benefit` needs the exact answer to be computable, which holds
+in simulation and not on hardware large enough to matter. The auditor says
+so rather than pretending otherwise.
+
 ### Grading a record vs verifying a claim
 
 With no adapter, the auditor grades the record **as written** — it checks
@@ -456,6 +497,7 @@ qem_auditor/
   frontdoor.py      bring a circuit, get a verdict
   api.py / cli.py   the entry points
   adapters/         execute controls instead of trusting them (needs qiskit)
+    sources.py      where expectation values come from: noiseless, or Aer noise
 benchmarks/         6 real QEM-Trust cases
 examples/           4 runnable end-to-end demonstrations
 tests/              407 tests
@@ -470,6 +512,7 @@ python examples/attack_a_pipeline.py        # genuine vs flexible (no qiskit)
 python examples/verify_zne_claim.py         # end-to-end verification (qiskit)
 python examples/adversarial_loop.py         # propose, execute, judge (qiskit)
 python examples/autonomous_audit.py         # the agent, unattended (qiskit)
+python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
 python -m unittest discover -s tests -t .   # full suite
 ```
 
@@ -494,10 +537,9 @@ Installing nothing runs everything except the adapters, which skip.
   its Q95 is the second-largest deviation and estimates the tail coarsely.
   The H4 robustness studies used 29-97 expensive draws. A near-threshold
   ratio should be read as "run more draws", not as a pass.
-- **Noisy-backend adapters**: the Qiskit adapter uses exact statevectors
-  plus sampled shot noise, which is what the ideal control needs. Aer
-  noise models, IBM or Quantinuum are the same interface with a different
-  expectation oracle.
+- **More sources**: IBM and Quantinuum are new `ExpectationSource`
+  implementations, not new adapters — `exact`, `sampled`, and a
+  `noiseless_twin` for the ideal control.
 - **Likelihoods from a simulator**: hypothesis likelihoods are supplied
   per observation. Generating `P(D|H_i)` from a predictive model would
   strengthen the Bayesian layer and let the proposer check a new

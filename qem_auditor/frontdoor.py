@@ -39,7 +39,8 @@ from .schema import (
 # What an auditor can establish from artifacts alone, versus what needs
 # the claimant's own experimental record. Kept explicit so the front door
 # can say so rather than leaving a user to infer it.
-MECHANIZABLE = ("unitary_equivalence", "ideal_control", "determinism_check")
+MECHANIZABLE = ("unitary_equivalence", "ideal_control", "determinism_check",
+                "mitigation_benefit")
 NEEDS_THE_RESEARCHER = (
     ("target_leakage", "whether the known answer influenced tuning -- procedural, "
                        "and not visible in a circuit"),

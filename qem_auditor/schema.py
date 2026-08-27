@@ -229,6 +229,13 @@ class Controls:
     """Does re-running the identical computation on identical inputs give
     an identical result?"""
 
+    mitigation_benefit: Optional[bool] = None
+    """Under real device noise, does the mitigation actually REDUCE the
+    error? The complement to the ideal control, and a different question:
+    the ideal control shows a method does not break without noise, which
+    is necessary and nowhere near sufficient. A method can pass it and
+    still do nothing useful once noise is present."""
+
     provenance: dict[str, Provenance] = field(default_factory=dict)
     """Per-control: SELF_REPORTED (the default for anything absent) or
     MEASURED. Set by adapters when the auditor runs a control itself."""

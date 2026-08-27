@@ -32,6 +32,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence
 
 from .base import ControlMeasurement, MeasurementError
+from .sources import AerNoiseSource, ExpectationSource, StatevectorSource
 
 # An expectation oracle: given a circuit and an observable, return <O>.
 # The claimant's mitigation pipeline is handed one of these and never
@@ -55,13 +56,29 @@ def _require_qiskit():
 
 
 class QiskitAdapter:
-    """Runs the mechanizable controls against Qiskit circuits."""
+    """Runs the mechanizable controls against Qiskit circuits.
+
+    `source` decides where expectation values come from. The default is a
+    noiseless statevector; pass an `AerNoiseSource` (or, later, an IBM or
+    Quantinuum source) to run the claim under real device noise.
+
+    The ideal control ignores `source` on purpose and always runs
+    noiseless. Its whole content is "does this method break with no noise
+    to correct", so running it through a noisy source would quietly turn
+    it into a different, much weaker check.
+    """
 
     name = "qiskit"
 
-    def __init__(self, seed: int = 0) -> None:
+    def __init__(self, seed: int = 0,
+                 source: Optional[ExpectationSource] = None) -> None:
         self.seed = seed
+        self.source = source or StatevectorSource()
         _require_qiskit()
+
+    @property
+    def is_noisy(self) -> bool:
+        return not self.source.is_noiseless
 
     # -- unitary equivalence -------------------------------------------
 
@@ -174,7 +191,8 @@ class QiskitAdapter:
 
     def measure_ideal_control(self, circuit, observable, mitigator: Mitigator,
                               shots: int = 100_000,
-                              degradation_factor: float = 10.0) -> ControlMeasurement:
+                              degradation_factor: float = 10.0,
+                              trials: int = 8) -> ControlMeasurement:
         """Run the claimant's mitigation against a noiseless model.
 
         The pipeline gets an expectation oracle backed by an exact
@@ -192,49 +210,170 @@ class QiskitAdapter:
         it exists to catch. The measured ratio is reported either way, so a
         caller who knows their estimator's coefficient norm can compare
         against it directly.
+
+        Judged over `trials` paired draws, not one. The ratio of two noisy
+        single draws is itself extremely noisy -- a lucky raw draw makes a
+        well-behaved estimator look catastrophic, and an unlucky one hides
+        a real blowup. Comparing typical magnitudes instead is the same
+        correction paired trials make in measure_mitigation_benefit, and
+        it was a single-draw ratio here reporting 43x for an estimator
+        whose true amplification is about 4.4x that prompted it.
         """
         _, SparsePauliOp, Statevector = _require_qiskit()
-        exact = self._exact_expectation(circuit, observable)
-        oracle, calls = self._noiseless_oracle(shots)
-        try:
-            mitigated = float(mitigator(oracle))
-        except Exception as e:
+        # Noiseless throughout, whatever source the adapter was built with.
+        noiseless = self.source.noiseless_twin()
+        exact = noiseless.exact(circuit, observable)
+        if trials < 2:
             raise MeasurementError(
-                f"the mitigation pipeline raised on noiseless input: {e}. That is "
-                f"itself worth knowing -- a pipeline that cannot run on a clean model "
-                f"has not been tested on one."
-            ) from e
+                "a single trial cannot separate amplification from a lucky draw")
 
-        raw = self._sampled_expectation(circuit, observable, shots, self.seed)
-        raw_error = abs(raw - exact)
-        mitigated_error = abs(mitigated - exact)
+        raw_errors, mitigated_errors, total_calls = [], [], 0
+        base_seed = self.seed
+        for t in range(trials):
+            try:
+                self.seed = base_seed + 1000 * (t + 1)
+                oracle, calls = self._oracle(shots, noiseless)
+                mitigated = float(mitigator(oracle))
+                raw = noiseless.sampled(circuit, observable, shots, self.seed)
+            except Exception as e:
+                self.seed = base_seed
+                raise MeasurementError(
+                    f"the mitigation pipeline raised on noiseless input: {e}. That is "
+                    f"itself worth knowing -- a pipeline that cannot run on a clean "
+                    f"model has not been tested on one.") from e
+            finally:
+                self.seed = base_seed
+            raw_errors.append(abs(raw - exact))
+            mitigated_errors.append(abs(mitigated - exact))
+            total_calls += calls["n"]
+
+        raw_errors.sort()
+        mitigated_errors.sort()
+        raw_error = raw_errors[len(raw_errors) // 2]
+        mitigated_error = mitigated_errors[len(mitigated_errors) // 2]
         evidence = {
             "exact": exact,
-            "raw": raw,
-            "mitigated": mitigated,
             "raw_error": raw_error,
             "mitigated_error": mitigated_error,
             "shots": shots,
-            "oracle_calls": calls["n"],
+            "trials": trials,
+            "oracle_calls": total_calls,
+            "source": noiseless.name,
+            "statistic": "median over paired trials",
         }
-        if raw_error > 0:
-            evidence["amplification"] = mitigated_error / raw_error
+        ratio = mitigated_error / max(raw_error, 1e-12)
+        evidence["amplification"] = ratio
 
         if mitigated_error > degradation_factor * max(raw_error, 1e-12):
-            ratio = mitigated_error / max(raw_error, 1e-12)
             return ControlMeasurement(
                 "ideal_control", False,
-                f"on a noiseless model, mitigation amplified the error {ratio:.1f}x "
-                f"({raw_error:.6g} -> {mitigated_error:.6g}) -- with zero physical noise "
-                f"to correct, this is the estimator amplifying shot noise",
+                f"on a noiseless model, mitigation amplified the median error "
+                f"{ratio:.1f}x across {trials} paired trials "
+                f"({raw_error:.6g} -> {mitigated_error:.6g}) -- with zero physical "
+                f"noise to correct, this is the estimator amplifying shot noise",
                 evidence)
-        ratio = mitigated_error / max(raw_error, 1e-12)
         return ControlMeasurement(
             "ideal_control", True,
             f"on a noiseless model, mitigation is not pathologically conditioned "
-            f"(raw error {raw_error:.6g}, mitigated {mitigated_error:.6g}, "
-            f"{ratio:.1f}x -- within the {degradation_factor:.0f}x bar; compare against "
-            f"your estimator's own coefficient norm)", evidence)
+            f"(median over {trials} trials: {raw_error:.6g} -> {mitigated_error:.6g}, "
+            f"{ratio:.1f}x -- within the {degradation_factor:.0f}x bar; compare "
+            f"against your estimator's own coefficient norm)",
+            evidence)
+
+    # -- does mitigation actually help? --------------------------------
+
+    def measure_mitigation_benefit(self, circuit, observable, mitigator,
+                                   shots: int = 20_000, trials: int = 8,
+                                   min_improvement: float = 1.1,
+                                   min_win_rate: float = 0.75) -> ControlMeasurement:
+        """Under real device noise, does the mitigation reduce the error?
+
+        The complement to the ideal control, and a genuinely different
+        question. The ideal control establishes that a method does not
+        BREAK when there is no noise -- necessary, and nowhere near
+        sufficient. A method can pass it and still fail to help at all
+        once noise is present, and nothing else in the auditor catches
+        that.
+
+        Judged over PAIRED trials rather than one draw, because a single
+        comparison cannot separate a real improvement from shot noise: a
+        do-nothing mitigator returns a ratio of 1.0 plus noise and so
+        "improves" about half the time. Requiring both a median ratio
+        above `min_improvement` and a win rate above `min_win_rate`
+        mirrors how this family of result is reported honestly elsewhere
+        ("wins 66/80 trials"), and a no-op fails both.
+
+        Requires a noisy source, and requires the exact answer to be
+        computable. Both hold in simulation, which is where this check
+        belongs; on hardware large enough to matter the exact value is not
+        available and this cannot be run. The auditor says so rather than
+        pretending otherwise.
+        """
+        if self.source.is_noiseless:
+            raise MeasurementError(
+                "measure_mitigation_benefit needs a noisy source -- with a noiseless "
+                "one there is no error for mitigation to reduce. Build the adapter "
+                "with QiskitAdapter(source=AerNoiseSource(noise_model)).")
+        if trials < 2:
+            raise MeasurementError(
+                "a single trial cannot separate a real improvement from shot noise")
+
+        noiseless = self.source.noiseless_twin()
+        truth = noiseless.exact(circuit, observable)
+
+        ratios, wins = [], 0
+        base_seed = self.seed
+        for t in range(trials):
+            try:
+                self.seed = base_seed + 1000 * (t + 1)
+                raw = self.source.sampled(circuit, observable, shots, self.seed)
+                oracle, _ = self._oracle(shots, self.source)
+                mitigated = float(mitigator(oracle))
+            except Exception as e:
+                self.seed = base_seed
+                raise MeasurementError(
+                    f"the mitigation pipeline raised under noise: {e}") from e
+            finally:
+                self.seed = base_seed
+            raw_error = abs(raw - truth)
+            mitigated_error = abs(mitigated - truth)
+            if raw_error <= 1e-12:
+                continue
+            ratios.append(raw_error / max(mitigated_error, 1e-12))
+            if mitigated_error < raw_error:
+                wins += 1
+
+        if len(ratios) < 2:
+            return ControlMeasurement(
+                "mitigation_benefit", None,
+                "the raw result is already exact under this noise model, so there is "
+                "nothing for mitigation to improve -- pick a noisier model or a "
+                "deeper circuit",
+                {"truth": truth, "trials": trials, "source": self.source.name})
+
+        ratios.sort()
+        median = ratios[len(ratios) // 2]
+        win_rate = wins / len(ratios)
+        evidence = {
+            "truth": truth, "median_improvement": median, "win_rate": win_rate,
+            "wins": wins, "trials": len(ratios), "shots": shots,
+            "source": self.source.name, "ratios": ratios,
+        }
+
+        if median < min_improvement or win_rate < min_win_rate:
+            return ControlMeasurement(
+                "mitigation_benefit", False,
+                f"under {self.source.name} the mitigation did not clearly help: median "
+                f"{median:.2f}x over {len(ratios)} paired trials, winning {wins}/"
+                f"{len(ratios)} (needed {min_improvement:.2f}x and "
+                f"{min_win_rate:.0%}). Passing the ideal control only shows a method "
+                f"does not break without noise; it does not show it helps with noise",
+                evidence)
+        return ControlMeasurement(
+            "mitigation_benefit", True,
+            f"under {self.source.name} the mitigation reduced the error by a median "
+            f"{median:.2f}x, winning {wins}/{len(ratios)} paired trials",
+            evidence)
 
     # -- determinism ---------------------------------------------------
 
@@ -270,38 +409,22 @@ class QiskitAdapter:
     # -- internals -----------------------------------------------------
 
     def _exact_expectation(self, circuit, observable) -> float:
-        _, _, Statevector = _require_qiskit()
-        state = Statevector.from_instruction(circuit)
-        return float(state.expectation_value(observable).real)
+        return self.source.exact(circuit, observable)
 
-    def _sampled_expectation(self, circuit, observable, shots: int, seed: int) -> float:
-        """Exact expectation plus honest shot noise.
+    def _sampled_expectation(self, circuit, observable, shots: int,
+                             seed: int, source=None) -> float:
+        """Expectation plus honest shot noise, from the configured source.
 
-        For an observable with eigenvalues +-1, N shots give a binomial
-        estimate: p(+1) = (1 + <O>)/2. Sampling that directly is exact for
-        a single Pauli term and avoids depending on any particular
-        primitives API. Weighted sums of Paulis are sampled term by term,
-        which slightly overstates the variance (it ignores the covariance
-        between commuting terms measured in one basis) -- stated here
-        rather than left for a reader to discover.
+        Weighted sums of Paulis are sampled term by term, which slightly
+        overstates the variance -- it ignores the covariance between
+        commuting terms measured in one basis. Stated here rather than
+        left for a reader to discover; it is conservative in the direction
+        that matters.
         """
-        import random
+        return (source or self.source).sampled(circuit, observable, shots, seed)
 
-        rng = random.Random(seed)
-        _, SparsePauliOp, _ = _require_qiskit()
-        obs = SparsePauliOp(observable) if not hasattr(observable, "paulis") else observable
-        total = 0.0
-        for pauli, coeff in zip(obs.paulis, obs.coeffs):
-            exact = self._exact_expectation(circuit, SparsePauliOp(pauli))
-            p_plus = min(1.0, max(0.0, (1.0 + exact) / 2.0))
-            hits = sum(1 for _ in range(shots) if rng.random() < p_plus) if shots < 20_000 \
-                else _fast_binomial(rng, shots, p_plus)
-            estimate = 2.0 * hits / shots - 1.0
-            total += float(coeff.real) * estimate
-        return total
-
-    def _noiseless_oracle(self, shots: int):
-        """An expectation oracle over an exact, noiseless model.
+    def _oracle(self, shots: int, source: ExpectationSource):
+        """An expectation oracle over a given source.
 
         Each call gets its own seed so repeated calls carry independent
         shot noise, as separate real submissions would.
@@ -310,10 +433,12 @@ class QiskitAdapter:
 
         def oracle(circuit, observable) -> float:
             calls["n"] += 1
-            return self._sampled_expectation(circuit, observable, shots,
-                                             self.seed + calls["n"])
+            return source.sampled(circuit, observable, shots, self.seed + calls["n"])
 
         return oracle, calls
+
+    def _noiseless_oracle(self, shots: int):
+        return self._oracle(shots, self.source.noiseless_twin())
 
 
 def _fast_binomial(rng, n: int, p: float) -> int:
