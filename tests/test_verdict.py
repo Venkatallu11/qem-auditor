@@ -25,15 +25,16 @@ class HardGatePrecedenceTest(unittest.TestCase):
         exp = make_experiment(ideal_control=False,
                               replicate_errors_kcal=[0.001] * 32,
                               mitigated_error_kcal=0.001,
-                              q95_kcal=0.002)
+                              q50_kcal=0.001, q95_kcal=0.002, q99_kcal=0.003)
         self.assertIs(audit(exp).verdict, Verdict.INVALID)
 
     def test_chemical_accuracy_alone_never_forces_invalid(self):
-        """It is informational: a real but not-yet-accurate-enough result is
-        under-established, not disproven."""
-        exp = make_experiment(mitigated_error_kcal=5.0, q95_kcal=9.0,
+        """Missing the accuracy bar refutes the claim as stated -- it never
+        makes the METHOD invalid, which is a claim about brokenness."""
+        exp = make_experiment(mitigated_error_kcal=5.0, q50_kcal=5.0,
+                              q95_kcal=9.0, q99_kcal=12.0,
                               replicate_errors_kcal=[5.0] * 8)
-        self.assertIs(audit(exp).verdict, Verdict.PROMISING)
+        self.assertIs(audit(exp).verdict, Verdict.REFUTED)
 
 
 class InsufficientEvidenceTest(unittest.TestCase):
@@ -69,14 +70,15 @@ class CertificationTest(unittest.TestCase):
         self.assertIs(audit(exp).verdict, Verdict.PROMISING)
 
     def test_missing_chemical_accuracy_blocks_certification(self):
-        exp = make_experiment(q95_kcal=1.50)
-        self.assertIs(audit(exp).verdict, Verdict.PROMISING)
+        exp = make_experiment(q95_kcal=1.50, q99_kcal=2.00)
+        self.assertIs(audit(exp).verdict, Verdict.REFUTED)
 
 
 class ReportShapeTest(unittest.TestCase):
     def test_report_carries_every_gate_result(self):
         report = audit(make_experiment())
-        self.assertEqual(len(report.gate_results), 5)
+        self.assertEqual(len(report.gate_results), len(__import__(
+            "qem_auditor.gates", fromlist=["gates"]).ALL_GATES))
         self.assertEqual(report.experiment_id, "fixture")
         self.assertEqual(report.integrity_violations, [])
 

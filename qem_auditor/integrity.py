@@ -61,6 +61,19 @@ def integrity_violations(exp: Experiment) -> list[str]:
                 "tighter than the point error it envelopes"
             )
 
+    if out.n_trials is not None and out.n_outlier_trials is not None:
+        if out.n_outlier_trials > out.n_trials:
+            v.append(f"n_outlier_trials={out.n_outlier_trials} exceeds n_trials={out.n_trials}")
+        if out.n_trials < 0 or out.n_outlier_trials < 0:
+            v.append("trial counts cannot be negative")
+
+    quantiles = [("q50_kcal", out.q50_kcal), ("q95_kcal", out.q95_kcal),
+                 ("q99_kcal", out.q99_kcal)]
+    present = [(n, q) for n, q in quantiles if q is not None]
+    for (n_lo, lo), (n_hi, hi) in zip(present, present[1:]):
+        if hi < lo:
+            v.append(f"{n_hi}={hi} is below {n_lo}={lo} -- quantiles must be non-decreasing")
+
     reps = out.replicate_errors_kcal
     if len(reps) >= 2 and out.mitigated_error_kcal is not None:
         m = mean(reps)

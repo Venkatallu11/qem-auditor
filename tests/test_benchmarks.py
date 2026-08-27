@@ -7,7 +7,7 @@ result certify before its replication is finished, this file fails.
 """
 import unittest
 
-from qem_auditor import audit
+from qem_auditor import audit, classify
 from qem_auditor.integrity import integrity_violations
 
 import run_benchmarks
@@ -28,6 +28,22 @@ class BenchmarkVerdictTest(unittest.TestCase):
 
     def test_runner_exits_zero_when_all_cases_match(self):
         self.assertEqual(run_benchmarks.main(), 0)
+
+    def test_every_case_with_a_pinned_failure_mode_gets_it_right(self):
+        for module in run_benchmarks.BENCHMARKS:
+            expected = getattr(module, "EXPECTED_PRIMARY_FAILURE_MODE", None)
+            if expected is None:
+                continue
+            with self.subTest(case=module.EXPERIMENT.experiment_id):
+                analysis = classify(module.EXPERIMENT, audit(module.EXPERIMENT))
+                self.assertIsNotNone(analysis.primary)
+                self.assertIs(analysis.primary.mode, expected)
+
+    def test_the_suite_covers_distinct_verdicts(self):
+        """A benchmark suite where everything lands on one verdict tests
+        almost nothing. These six were chosen to separate."""
+        verdicts = {audit(m.EXPERIMENT).verdict for m in run_benchmarks.BENCHMARKS}
+        self.assertGreaterEqual(len(verdicts), 5)
 
 
 class ZneBlowupCaseTest(unittest.TestCase):

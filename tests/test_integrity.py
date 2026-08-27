@@ -62,19 +62,22 @@ class ViolationTest(unittest.TestCase):
         """A 95% envelope narrower than the error it envelopes is not a
         stricter result, it is a bookkeeping error -- and it would otherwise
         make a claim look BETTER at the chemical-accuracy gate."""
-        self.assert_violates("cannot be", mitigated_error_kcal=0.40, q95_kcal=0.10,
+        self.assert_violates("cannot be", mitigated_error_kcal=0.40, q50_kcal=0.05,
+                             q95_kcal=0.10, q99_kcal=0.15,
                              replicate_errors_kcal=[0.40] * 8)
 
     def test_headline_number_not_backed_by_its_own_replicates(self):
         """The best-draw-as-headline pattern: eight replicates around 0.5,
         reported as 0.01."""
         self.assert_violates("not what the replicates measured",
-                             mitigated_error_kcal=0.01, q95_kcal=0.60,
+                             mitigated_error_kcal=0.01, q50_kcal=0.50, q95_kcal=0.60,
+                             q99_kcal=0.70,
                              replicate_errors_kcal=[0.50, 0.52, 0.48, 0.51,
                                                     0.49, 0.50, 0.53, 0.47])
 
     def test_headline_within_replicate_scatter_is_fine(self):
-        exp = make_experiment(mitigated_error_kcal=0.50, q95_kcal=0.60,
+        exp = make_experiment(mitigated_error_kcal=0.50, q50_kcal=0.50,
+                              q95_kcal=0.60, q99_kcal=0.70,
                               replicate_errors_kcal=[0.48, 0.52, 0.49, 0.51])
         self.assertEqual(integrity_violations(exp), [])
 

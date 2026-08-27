@@ -1,4 +1,4 @@
-"""Real benchmark case #2: the current best result from quantum-chemistry-vqe,
+"""QEM-Trust case 6: the current best result from quantum-chemistry-vqe,
 run through the same auditor that flags failures -- deliberately NOT told
 in advance that this is "the winner."
 
@@ -37,38 +37,90 @@ not yet CERTIFIED, because full 8-draw replication isn't complete and
 there is no full real-hardware energy validation, even though every hard
 gate and the chemical-accuracy bar are currently clean.
 """
-from qem_auditor import Controls, Experiment, Outputs, Verdict
+from qem_auditor import (
+    CircuitSpec,
+    Controls,
+    Experiment,
+    FailureMode,
+    NoiseSpec,
+    Outputs,
+    Replicate,
+    ReplicateKind,
+    TranspilationStatus,
+    UncertaintyCoverage,
+    Verdict,
+)
 
 EXPERIMENT = Experiment(
     experiment_id="h4_ancilla_qed_conditioned_pec",
+    claim="Ancilla-parity leakage detection with conditioned PEC reaches chemical accuracy on H4.",
     description=(
         "Native ancilla-parity leakage detection + conditioned PEC, H4 entanglement "
         "forging (K=6), real ionq_simulator replication draws 0-3."
     ),
     backend="ionq_simulator (aria-1, forte-1)",
     shots=20_000,
+    circuit=CircuitSpec(
+        circuit_id="h4_ef_ancilla_native_k6",
+        native_gate_set="IonQ native (GPi/GPi2/ZZ)",
+        transpilation_status=TranspilationStatus.VERIFIED_EQUIVALENT,
+        optimization_level=0,
+        n_1q_gates=120,
+        n_2q_gates=11,
+        n_qubits=5,
+    ),
+    noise=NoiseSpec(
+        noise_model="aria-1 / forte-1 named profiles, randomized robustness envelope",
+        calibration_source="real measured sweeps; envelope intervals justified from them",
+        calibration_uncertainty_propagated=True,
+    ),
     controls=Controls(
         ideal_control=True,
+        unitary_equivalence=True,
         target_leakage_check=True,
+        free_parameter_floor_test=True,
         adversarial_check=True,
+        heldout_check=True,
+        extrapolation_in_domain=True,
+        determinism_check=True,
         reproducibility_checked=True,
     ),
     outputs=Outputs(
         raw_error_kcal=None,  # not meaningful as a single number for a multi-slot pipeline
         mitigated_error_kcal=0.0144,  # mean of the 4 completed draws
-        replicate_errors_kcal=[0.01555, 0.01535, 0.01175, 0.01485],  # per-draw mean of aria-1/forte-1
-        q95_kcal=0.0491,  # robustness envelope including p_readout uncertainty (the honest, complete number)
+        # Genuinely independent submissions: 4 separate real ionq_simulator
+        # jobs, 546 circuits each, not resamples of one collection.
+        replicates=[
+            Replicate(0.01555, ReplicateKind.INDEPENDENT_SUBMISSION, "draw_0"),
+            Replicate(0.01535, ReplicateKind.INDEPENDENT_SUBMISSION, "draw_1"),
+            Replicate(0.01175, ReplicateKind.INDEPENDENT_SUBMISSION, "draw_2"),
+            Replicate(0.01485, ReplicateKind.INDEPENDENT_SUBMISSION, "draw_3"),
+        ],
+        q95_kcal=0.0491,  # robustness envelope including p_readout uncertainty
         n_replicates_target=8,
+        uncertainty=UncertaintyCoverage(
+            shot_noise=True,
+            method_monte_carlo=True,
+            cross_submission=True,
+            noise_model=True,
+        ),
     ),
     real_hardware_full_validation=False,
+    suspected_failure_modes=[FailureMode.UNDER_POWERED],
     notes=(
-        "4/8 draws of this project's own replication target completed; real hardware "
-        "spot-checks (not a full energy reconstruction) are consistent with the simulator."
+        "4/8 draws of this project's own replication target completed. Real hardware: "
+        "3 circuits run on qpu.forte-enterprise-1 at 2000 shots, retained-parity "
+        "fractions 91.5/90.2/90.1% against the simulator's 90.7/91.5% -- consistent, and "
+        "a spot-check rather than an energy reconstruction. A full 21-slot x 13-group "
+        "sweep is ~273 circuits at ~$25/circuit (cost is per-circuit, not per-shot, "
+        "confirmed by a 100->500 shot probe costing the same), so ~$6,825 -- which is "
+        "why real_hardware_full_validation stays False."
     ),
 )
 
 # Asserted by run_benchmarks.py. The point of pinning this one is the
-# opposite of the ZNE case: the auditor must keep REFUSING to certify the
-# project's own best result while replication and real-hardware validation
-# are incomplete, no matter how clean the hard gates look.
+# opposite of the failure cases: the auditor must keep REFUSING to certify
+# the project's own best result while replication and real-hardware
+# validation are incomplete, no matter how clean every gate looks.
 EXPECTED_VERDICT = Verdict.PROMISING
+EXPECTED_PRIMARY_FAILURE_MODE = None
