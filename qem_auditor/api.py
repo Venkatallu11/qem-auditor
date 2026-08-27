@@ -33,6 +33,7 @@ from . import record
 from .adapters.base import ControlMeasurement
 from .adversary import AdversarialScientist, AttackPlan
 from .executor import AttackExecutor, AttackReport
+from .frontdoor import VerificationInputs, build_experiment, unverifiable_here
 from .power import PowerAnalysis, analyze_experiment
 from .claim import CompiledClaim, compile_claim
 from .failure_modes import FailureAnalysis, classify
@@ -53,6 +54,10 @@ class AuditResult:
     measurements: list[ControlMeasurement] = field(default_factory=list)
     attacks: Optional[AttackPlan] = None
     power: Optional[PowerAnalysis] = None
+    outside_scope: list = field(default_factory=list)
+    """(control, why) the auditor structurally cannot establish from the
+    artifacts it was given. Distinguishes 'your method failed this' from
+    'nobody could check this from a circuit alone'."""
 
     @property
     def verdict(self) -> Verdict:
@@ -82,6 +87,10 @@ class AuditResult:
         parts = [self.claim.render()]
         if self.power is not None:
             parts.append(f"\nSTATISTICAL POWER:\n  {self.power.summary()}")
+        if self.outside_scope:
+            parts.append("\nOUTSIDE WHAT THIS CHECK CAN ESTABLISH:")
+            for name, why in self.outside_scope:
+                parts.append(f"  {name}: {why}")
         if self.attacks and self.attacks.attacks:
             parts.append(f"\nUNTESTED ATTACK SURFACE ({len(self.attacks.attacks)}):")
             for a in self.attacks.attacks:
@@ -131,7 +140,73 @@ class Auditor:
             power=analyze_experiment(exp),
         )
 
-    # -- adversarial ---------------------------------------------------
+    # -- the front door ------------------------------------------------
+
+    def verify(self, circuit: Any, observable: Any = None,
+               mitigator: Any = None, *,
+               submitted_circuit: Any = None,
+               amplified_circuit: Any = None,
+               claim: str = "", backend: str = "unspecified",
+               shots: int = 20_000,
+               replicate_errors: Any = (),
+               experiment_id: str = "",
+               run_attacks: bool = True,
+               **agent_kwargs) -> AuditResult:
+        """Audit a circuit directly, without writing a record first.
+
+        Builds the record from the artifacts, executes every control it
+        can, and reports the verdict. Controls it cannot execute stay
+        unrun and are listed separately -- so a user can tell what their
+        method failed apart from what nobody could check from a circuit.
+
+        Needs an adapter to execute anything. Without one it still builds
+        and grades the record, which is a weaker but honest answer.
+        """
+        inputs = VerificationInputs(
+            circuit=circuit, observable=observable, mitigator=mitigator,
+            submitted_circuit=submitted_circuit,
+            amplified_circuit=amplified_circuit,
+            claim=claim, backend=backend,
+            shots=shots, replicate_errors=tuple(replicate_errors))
+        exp = build_experiment(inputs, experiment_id)
+
+        if self.adapter is not None:
+            self._run_what_we_can(exp, inputs)
+
+        result = self.audit(exp, propose_attacks=run_attacks)
+        result.outside_scope = unverifiable_here()
+        return result
+
+    def _run_what_we_can(self, exp: Experiment, inputs: VerificationInputs) -> None:
+        """Execute the mechanizable controls against the real artifacts."""
+        submitted = inputs.submitted_circuit
+        if submitted is not None:
+            try:
+                if inputs.amplified_circuit is not None:
+                    # The pipeline deliberately inserts gates, so the
+                    # question is whether they SURVIVED -- not merely
+                    # whether the unitary matches, which a fold pair is
+                    # designed to leave alone and which therefore passes
+                    # precisely when the folds have been cancelled.
+                    self.verify_fold_survival(exp, base=inputs.circuit,
+                                              submitted=submitted)
+                else:
+                    self.verify_unitary_equivalence(exp, inputs.circuit, submitted)
+            except Exception:
+                pass  # reported as unrun, never as passed
+
+        if inputs.mitigator is not None and inputs.observable is not None:
+            try:
+                self.verify_ideal_control(exp, inputs.circuit, inputs.observable,
+                                          inputs.mitigator, shots=inputs.shots)
+            except Exception:
+                pass
+            try:
+                oracle_free = lambda: float(inputs.mitigator(
+                    lambda c, o: self.adapter._exact_expectation(c, o)))
+                self.verify_determinism(exp, oracle_free, runs=3)
+            except Exception:
+                pass
 
     def attack(self, experiment: Experiment | str | Path | dict) -> AttackPlan:
         """Propose falsification experiments for a claim.
