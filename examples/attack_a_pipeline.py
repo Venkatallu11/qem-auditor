@@ -85,6 +85,68 @@ class ScaleReconstructor:
         return sum(residuals) / max(1, len(residuals))
 
 
+class FullyInstrumentedReconstructor(ScaleReconstructor):
+    """The genuine pipeline, plus the three optional capabilities that make
+    the rest of the grammar executable.
+
+    Nothing here is exotic: a method that has free parameters can expose
+    them, a method that assumes a noise model can expose its intervals,
+    and a method that imposes a structural constraint can fit without it.
+    Each is a handful of lines, and each unlocks an attack that otherwise
+    has to be taken on trust.
+    """
+
+    # -- Parameterised: T_leakage ------------------------------------
+    def free_parameters(self):
+        # (floor, nominal). The floor is the limit worth probing -- for a
+        # CDR-style method, a training radius shrinking to zero.
+        return {"training_radius": (0.0, 1.0)}
+
+    def evaluate_at(self, name, value, data):
+        """At radius 1.0 the correction is fitted from the data. As the
+        radius goes to zero this (deliberately degenerate) variant slides
+        toward returning the known ideal regardless of what was measured
+        -- which is exactly the disqualified CDR behaviour."""
+        fitted = self.reconstruct(self.fit(data), data)
+        known_answer = sum(IDEAL.values())
+        return value * fitted + (1.0 - value) * known_answer
+
+    # -- NoiseModelled: T_calibration --------------------------------
+    def noise_parameters(self):
+        return {label: (att * 0.97, att * 1.03) for label, att in ATTENUATION.items()}
+
+    def evaluate_under_noise(self, params, data):
+        total = 0.0
+        for label in IDEAL:
+            vals = [m.value for m in data.measurements
+                    if m.label == label and m.slot == TARGET_SLOT]
+            scale = params.get(label) or 1.0
+            if vals:
+                total += mean(vals) / scale
+        return total
+
+    # -- StructurallyConstrained: T_correlation ----------------------
+    def fit_without_structure(self, data):
+        """Drop the per-label pooling: one scale per (slot, label), fitted
+        from a single measurement each. Identifiable in principle, far
+        noisier in practice."""
+        out = {}
+        for m in data.measurements:
+            if m.slot in TRAINING_SLOTS and IDEAL.get(m.label):
+                out[(m.slot, m.label)] = m.value / IDEAL[m.label]
+        return out
+
+    def reconstruct_without_structure(self, fit, data):
+        total = 0.0
+        for label in IDEAL:
+            scales = [v for (slot, lab), v in fit.items() if lab == label]
+            vals = [m.value for m in data.measurements
+                    if m.label == label and m.slot == TARGET_SLOT]
+            if scales and vals and abs(scales[0]) > 1e-9:
+                total += mean(vals) / scales[0]
+        return total
+
+
 class FlexibleReconstructor:
     """One parameter per measurement. Not a strawman -- this is what an
     over-parameterised correction looks like, and on real data it reports
@@ -146,6 +208,25 @@ def main() -> None:
             print(f"              {outcome.detail}")
         print()
 
+    # The three that need the optional capabilities.
+    print("=" * 74)
+    print("WITH THE OPTIONAL CAPABILITIES IMPLEMENTED")
+    print("=" * 74)
+    print("  free_parameters/evaluate_at, noise_parameters/evaluate_under_noise,")
+    print("  and fit_without_structure -- a handful of lines each.")
+    print()
+    instrumented = FullyInstrumentedReconstructor()
+    extra = [GRAMMAR[n](exp) for n in ("T_leakage", "T_calibration", "T_correlation")]
+    report = AttackExecutor().run(
+        exp, AttackPlan(exp.experiment_id, extra),
+        reconstructor=instrumented, fit_data=data)
+    for outcome in report.outcomes:
+        verdict = ("SURVIVED" if outcome.survived else
+                   "FALSIFIED" if outcome.survived is False else "NOT RUN")
+        print(f"  [{verdict:9}] {outcome.attack.attack_id}")
+        print(f"              {outcome.detail}")
+    print()
+
     print("=" * 74)
     print("READING THIS")
     print("=" * 74)
@@ -167,6 +248,13 @@ def main() -> None:
   there is no expensive per-draw Monte Carlo in it. On the real H4 pipeline
   the same test returns the opposite, and that is the case where "run more
   shots" is the expensive wrong answer.
+
+  T_leakage catches the degenerate variant. As the training radius goes to
+  zero, that pipeline slides toward returning the known answer whatever was
+  measured -- so the gap between its output on real and on SCRAMBLED data
+  collapses. Note the statistic: dependence on the data, not distance to
+  the truth. An auditor holding the true answer would not need to be an
+  auditor.
 """)
 
 

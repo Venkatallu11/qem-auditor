@@ -257,3 +257,125 @@ class FitBasedAttackTest(unittest.TestCase):
         outcome = self._run("T_shot", Constant(), data)
         self.assertIsNone(outcome.survived)
         self.assertIn("did not move", outcome.detail)
+
+
+class OptionalCapabilityAttackTest(unittest.TestCase):
+    """T_leakage, T_calibration and T_correlation, through the optional
+    capabilities."""
+
+    def _data(self):
+        from qem_auditor.reconstruct import FitData, Measurement
+
+        return FitData([
+            Measurement(slot=s, label=l, value=v * 0.9 + 0.002 * (d + 1),
+                        sigma=0.01, shots=1000, draw=d)
+            for d in range(4) for s in ("u0", "u1")
+            for l, v in (("XX", 0.8), ("YY", -0.6), ("ZZ", 0.4))])
+
+    def _run(self, name, reconstructor, **extra):
+        from qem_auditor.adversary import AttackPlan, GRAMMAR
+
+        exp = make_experiment()
+        plan = AttackPlan(exp.experiment_id, [GRAMMAR[name](exp)])
+        return AttackExecutor().run(exp, plan, reconstructor=reconstructor,
+                                    fit_data=self._data(), **extra).outcomes[0]
+
+    def test_a_pipeline_without_the_capability_reports_how_to_add_it(self):
+        class Bare:
+            def fit(self, d):
+                return {}
+
+            def reconstruct(self, f, d):
+                return 1.0
+
+            def goodness_of_fit(self, f, d):
+                return 1.0
+
+        for name, expected in (("T_leakage", "free_parameters"),
+                               ("T_calibration", "noise_parameters"),
+                               ("T_correlation", "fit_without_structure")):
+            with self.subTest(attack=name):
+                outcome = self._run(name, Bare())
+                self.assertIsNone(outcome.survived)
+                self.assertIn(expected, outcome.detail)
+
+    def test_leakage_catches_a_degenerating_parameter(self):
+        from statistics import mean
+
+        class Degenerate:
+            def fit(self, d):
+                return {}
+
+            def reconstruct(self, f, d):
+                return mean([m.value for m in d.measurements])
+
+            def goodness_of_fit(self, f, d):
+                return 1.0
+
+            def free_parameters(self):
+                return {"radius": (0.0, 1.0)}
+
+            def evaluate_at(self, name, value, d):
+                measured = mean([m.value for m in d.measurements])
+                return value * measured + (1.0 - value) * 42.0
+
+        outcome = self._run("T_leakage", Degenerate())
+        self.assertIs(outcome.survived, False)
+        self.assertIn("deriving rather than measuring", outcome.detail)
+
+    def test_calibration_catches_a_fragile_noise_dependence(self):
+        from statistics import mean
+
+        class Fragile:
+            def fit(self, d):
+                return {}
+
+            def reconstruct(self, f, d):
+                return mean([m.value for m in d.measurements])
+
+            def goodness_of_fit(self, f, d):
+                return 1.0
+
+            def noise_parameters(self):
+                return {"p": (0.02, 0.4)}
+
+            def evaluate_under_noise(self, params, d):
+                return mean([m.value for m in d.measurements]) / params["p"]
+
+        outcome = self._run("T_calibration", Fragile(), calibration_draws=64)
+        self.assertIs(outcome.survived, False)
+        self.assertIn("one lucky calibration", outcome.detail)
+
+    def test_correlation_catches_a_load_bearing_assumption(self):
+        from statistics import mean
+
+        class Propped:
+            """Stable only because of its constraint; wild without it."""
+
+            def fit(self, d):
+                return {"scale": 1.0}
+
+            def reconstruct(self, f, d):
+                return mean([m.value for m in d.measurements])
+
+            def goodness_of_fit(self, f, d):
+                return 1.0
+
+            def fit_without_structure(self, d):
+                # Without pooling, the scale comes from the difference of
+                # two same-label measurements from adjacent draws. They
+                # differ by ~0.002 against a shot sigma of 0.01, so the
+                # denominator swings through zero under resampling: the
+                # classic ill-conditioned fit that only the pooling
+                # constraint was holding together.
+                same_label = [m for m in d.measurements if m.label == "XX"]
+                return {"scale": same_label[0].value - same_label[2].value}
+
+            def reconstruct_without_structure(self, f, d):
+                scale = f["scale"]
+                return mean([m.value for m in d.measurements]) / (
+                    scale if abs(scale) > 1e-12 else 1e-12)
+
+        outcome = self._run("T_correlation", Propped())
+        self.assertIs(outcome.survived, False)
+        self.assertIn("buying existence", outcome.detail)

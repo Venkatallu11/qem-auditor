@@ -219,9 +219,14 @@ and they compose:
 
 | | needs | status |
 |---|---|---|
-| `T_compiler` `T_extrapolation` `T_seed` | a backend | **executable** |
-| `T_label` `T_sign` `T_shot` | your fitting code | **executable** |
-| `T_calibration` `T_leakage` `T_correlation` | a domain hook | proposed only |
+| `T_compiler` `T_extrapolation` `T_seed` | a backend adapter | **executable** |
+| `T_label` `T_sign` `T_shot` | `fit` / `reconstruct` / `goodness_of_fit` | **executable** |
+| `T_leakage` | `free_parameters` / `evaluate_at` | **executable** |
+| `T_calibration` | `noise_parameters` / `evaluate_under_noise` | **executable** |
+| `T_correlation` | `fit_without_structure` | **executable** |
+
+All nine execute. The three optional capabilities are a handful of lines
+each, and each unlocks an attack that would otherwise be taken on trust.
 
 An attack is only an attack if it predicts **different** outcomes under
 "genuine" and "artifact". `Prediction` refuses to be constructed otherwise
@@ -259,6 +264,32 @@ and watches whether the model noticed:
 | `T_label` | permutes labels within each (slot, draw) | the shuffled fit is about as good |
 | `T_sign` | negates every measured value | the model fits the negation as well |
 | `T_shot` | resamples shot noise vs. subsamples your own MC draws | your own sampling dominates |
+
+Three more become executable if you expose a little more. Each is
+optional and checked for at runtime, so nobody implements machinery for
+an attack that does not apply to their method:
+
+```python
+    # T_leakage
+    def free_parameters(self): ...      # name -> (floor, nominal)
+    def evaluate_at(self, name, value, data): ...
+
+    # T_calibration
+    def noise_parameters(self): ...     # name -> (low, high)
+    def evaluate_under_noise(self, params, data): ...
+
+    # T_correlation
+    def fit_without_structure(self, data): ...
+    def reconstruct_without_structure(self, fit, data): ...
+```
+
+`T_leakage` is worth a note on what it measures. The obvious test — "does
+the estimate converge on the exact answer?" — is unusable, because an
+auditor holding the exact answer does not need to be an auditor. The
+usable statistic is whether the estimate stops responding to the **data**:
+the auditor feeds real and *scrambled* measurements at each parameter
+value and watches the gap between them collapse. That catches the
+disqualified CDR behaviour without any ground truth at all.
 
 **Why goodness-of-fit and not accuracy.** The auditor does not have the
 true answer and should not be trusted with it if it did. What it can do is
@@ -448,8 +479,10 @@ Installing nothing runs everything except the adapters, which skip.
 
 ## What this is not
 
-- **Not a full audit.** Six of nine transformations execute; three still
-  need a domain hook. The tool says which on every run.
+- **Not a full audit.** All nine transformations execute, but only against
+  a pipeline that exposes the relevant interface. Implement three methods
+  and six run; implement three more and all nine do. What was not run is
+  reported as not run, never as passed.
 - **Not an authenticator.** Provenance detects change, not forgery.
 - **Not a source of truth about your method.** Target leakage, adversarial
   design and free-parameter floors are procedural and still rest on honest
@@ -457,10 +490,10 @@ Installing nothing runs everything except the adapters, which skip.
 
 ## Roadmap
 
-- **The last three transformations**: `T_calibration` needs the claimant's
-  noise model rather than just their fit; `T_leakage` needs their free
-  parameters; `T_correlation` needs their structural assumption stated in
-  a form that can be dropped.
+- **Tail resolution**: the calibration envelope defaults to 32 draws, so
+  its Q95 is the second-largest deviation and estimates the tail coarsely.
+  The H4 robustness studies used 29-97 expensive draws. A near-threshold
+  ratio should be read as "run more draws", not as a pass.
 - **Noisy-backend adapters**: the Qiskit adapter uses exact statevectors
   plus sampled shot noise, which is what the ideal control needs. Aer
   noise models, IBM or Quantinuum are the same interface with a different

@@ -233,3 +233,132 @@ class SpreadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScrambleTest(unittest.TestCase):
+    def test_values_are_replaced_within_the_observed_range(self):
+        from qem_auditor.reconstruct import scramble
+
+        data = _data(noise=0.01)
+        scrambled = scramble(data, seed=1)
+        low = min(m.value for m in data.measurements)
+        high = max(m.value for m in data.measurements)
+        for m in scrambled.measurements:
+            self.assertGreaterEqual(m.value, low)
+            self.assertLessEqual(m.value, high)
+
+    def test_it_actually_changes_the_data(self):
+        from qem_auditor.reconstruct import scramble
+
+        data = _data(noise=0.01)
+        self.assertNotEqual([m.value for m in scramble(data, 1).measurements],
+                            [m.value for m in data.measurements])
+
+    def test_structure_is_preserved(self):
+        """Only the values are garbage; slots, labels and draws stay put."""
+        from qem_auditor.reconstruct import scramble
+
+        data = _data(noise=0.01)
+        scrambled = scramble(data, 1)
+        self.assertEqual([(m.slot, m.label, m.draw) for m in scrambled.measurements],
+                         [(m.slot, m.label, m.draw) for m in data.measurements])
+
+
+class DegeneracyScanTest(unittest.TestCase):
+    """The statistic is dependence on the DATA, not distance to the truth --
+    an auditor holding the true answer would not need to be an auditor."""
+
+    class _Degenerate:
+        """Slides toward a fixed answer as the parameter goes to its floor."""
+
+        def evaluate_at(self, name, value, data):
+            measured = mean([m.value for m in data.measurements])
+            return value * measured + (1.0 - value) * 42.0
+
+    class _Honest:
+        """Keeps depending on the data at every parameter value."""
+
+        def evaluate_at(self, name, value, data):
+            return mean([m.value for m in data.measurements]) * (1.0 + value)
+
+    def test_a_degenerate_method_is_caught(self):
+        from qem_auditor.reconstruct import degeneracy_scan
+
+        scan = degeneracy_scan(self._Degenerate(), _data(noise=0.05),
+                               "radius", floor=0.0, nominal=1.0)
+        self.assertTrue(scan.degenerates)
+        self.assertAlmostEqual(scan.divergence[0], 0.0, places=9)
+
+    def test_an_honest_method_is_not(self):
+        from qem_auditor.reconstruct import degeneracy_scan
+
+        scan = degeneracy_scan(self._Honest(), _data(noise=0.05),
+                               "radius", floor=0.5, nominal=1.0)
+        self.assertFalse(scan.degenerates)
+
+    def test_a_failing_evaluation_is_skipped_not_counted_as_zero(self):
+        from qem_auditor.reconstruct import degeneracy_scan
+
+        class Fragile:
+            def evaluate_at(self, name, value, data):
+                if value < 0.5:
+                    raise ValueError("undefined below 0.5")
+                return mean([m.value for m in data.measurements]) * value
+
+        scan = degeneracy_scan(Fragile(), _data(noise=0.05), "r", 0.0, 1.0, steps=5)
+        self.assertLess(len(scan.values), 5)
+        self.assertFalse(scan.degenerates)
+
+
+class NoiseEnvelopeTest(unittest.TestCase):
+    class _Robust:
+        def noise_parameters(self):
+            return {"p": (0.99, 1.01)}
+
+        def evaluate_under_noise(self, params, data):
+            return mean([m.value for m in data.measurements]) / params["p"]
+
+    class _Fragile:
+        """Genuinely fragile: the assumed parameter can approach zero, and
+        the correction divides by it."""
+
+        def noise_parameters(self):
+            return {"p": (0.02, 0.4)}
+
+        def evaluate_under_noise(self, params, data):
+            return mean([m.value for m in data.measurements]) / params["p"]
+
+    def test_a_robust_method_has_a_tight_envelope(self):
+        from qem_auditor.reconstruct import noise_envelope
+
+        nominal, q95, samples = noise_envelope(self._Robust(), _data(noise=0.01))
+        self.assertLess(q95 / abs(nominal), 0.1)
+        self.assertGreater(len(samples), 1)
+
+    def test_a_fragile_method_has_a_wide_one(self):
+        from qem_auditor.reconstruct import noise_envelope
+
+        nominal, q95, _ = noise_envelope(self._Fragile(), _data(noise=0.01),
+                                         draws=64)
+        self.assertGreater(q95 / abs(nominal), 1.0)
+
+    def test_deviation_is_measured_against_the_nominal_not_a_truth(self):
+        """The auditor has no absolute target and must not pretend to one."""
+        from qem_auditor.reconstruct import noise_envelope
+
+        nominal, q95, _ = noise_envelope(self._Robust(), _data(noise=0.01))
+        self.assertGreater(abs(nominal), 0.0)
+        self.assertGreaterEqual(q95, 0.0)
+
+    def test_no_parameters_is_an_error(self):
+        from qem_auditor.reconstruct import ReconstructionError, noise_envelope
+
+        class Bare:
+            def noise_parameters(self):
+                return {}
+
+            def evaluate_under_noise(self, params, data):
+                return 0.0
+
+        with self.assertRaises(ReconstructionError):
+            noise_envelope(Bare(), _data())
