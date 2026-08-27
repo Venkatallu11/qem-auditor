@@ -24,13 +24,24 @@ jobs:
       - run: python run_audit_loop.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
       # Every CLI subcommand, so a broken entry point fails here rather
-      # than for whoever runs it. `attack` and `blind` exit non-zero by
-      # design on an unproven record, so assert the code rather than the
-      # absence of one.
+      # than for whoever runs it. `audit` and `attack` exit non-zero by
+      # design on an unproven record, so the exit CODE is what gets
+      # asserted, not the absence of one.
+      #
+      # errexit has to come off around the calls themselves: the runner
+      # uses `bash -e`, under which `cmd; test $? -eq 1` still aborts on
+      # cmd's own failure and never reaches the assertion. Capture first,
+      # assert after.
       - run: |
-          qem-auditor audit /tmp/t.json; test $? -eq 1
-          qem-auditor attack /tmp/t.json; test $? -eq 1
-          qem-auditor blind /tmp/t.json; test $? -eq 0
+          set +e
+          qem-auditor audit  /tmp/t.json > /dev/null; audit=$?
+          qem-auditor attack /tmp/t.json > /dev/null; attack=$?
+          qem-auditor blind  /tmp/t.json > /dev/null; blind=$?
+          set -e
+          echo "audit=$audit attack=$attack blind=$blind"
+          test "$audit"  -eq 1   # not certified
+          test "$attack" -eq 1   # attack surface untested
+          test "$blind"  -eq 0   # blind decision was correct
 
   adapters:
     name: adapters (qiskit)
