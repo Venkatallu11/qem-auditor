@@ -75,16 +75,25 @@ examples/           end-to-end verification of a ZNE claim
 tests/              168 tests
 ```
 
+## Install
+
+```bash
+pip install -e .                 # core: no dependencies at all
+pip install -e ".[adapters]"     # plus qiskit, to execute controls
+```
+
 ## Using it on your own experiment
 
 No Python required for the basic path:
 
 ```bash
-python -m qem_auditor template > my_experiment.json   # a blank record to fill in
-python -m qem_auditor validate my_experiment.json     # is it readable and self-consistent?
-python -m qem_auditor audit my_experiment.json        # the verdict, why, and what to run next
-python -m qem_auditor audit my_experiment.json --json # machine-readable, for CI
+qem-auditor template > my_experiment.json   # a blank record to fill in
+qem-auditor validate my_experiment.json     # is it readable and self-consistent?
+qem-auditor audit my_experiment.json        # the verdict, why, and what to run next
+qem-auditor audit my_experiment.json --json # machine-readable, for CI
 ```
+
+(`python -m qem_auditor ...` works identically.)
 
 Exit codes are meant for CI, so a claim cannot quietly regress: `0` certified,
 `1` anything else, `2` the record could not be read.
