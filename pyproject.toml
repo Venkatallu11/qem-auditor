@@ -24,7 +24,7 @@ dependencies = []
 
 [project.optional-dependencies]
 # Needed only to EXECUTE controls rather than grade a record as written.
-adapters = ["qiskit>=1.0"]
+adapters = ["qiskit>=1.0", "qiskit-aer>=0.14"]
 
 [project.scripts]
 qem-auditor = "qem_auditor.cli:main"

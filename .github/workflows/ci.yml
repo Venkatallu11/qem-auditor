@@ -55,13 +55,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[adapters]"
+      - run: pip install -e ".[adapters]" qiskit-aer
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
       # Pure-stdlib: the fit-based attacks need no backend at all.
       - run: python examples/attack_a_pipeline.py
       - run: python examples/autonomous_audit.py
+      - run: python examples/check_under_noise.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

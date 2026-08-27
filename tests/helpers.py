@@ -31,6 +31,7 @@ def make_experiment(**overrides) -> Experiment:
         extrapolation_in_domain=True,
         free_parameter_floor_test=True,
         determinism_check=True,
+        mitigation_benefit=True,
     )
     outputs = Outputs(
         raw_error_kcal=1.20,

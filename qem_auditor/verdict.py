@@ -71,6 +71,9 @@ REQUIRED_FOR_CERTIFICATION = (
     # not rest on the claimant's word for anything the auditor could have
     # checked itself.
     gates.independent_verification_gate,
+    # A method not shown to help under noise is not certifiable, even
+    # though failing this does not make it INVALID.
+    gates.mitigation_benefit_gate,
 )
 
 
