@@ -226,6 +226,45 @@ def candidates_from_audit(exp: Experiment, report: AuditReport) -> list[Candidat
     return out
 
 
+def candidate_from_attack(attack, discrimination: float | None = None,
+                          h_genuine: str = "H_genuine",
+                          h_artifact: str = "H_artifact") -> CandidateExperiment:
+    """Turns an adversarial attack into a VOI-rankable candidate.
+
+    An attack already carries what the planner needs: two outcomes with
+    different meanings under two hypotheses. `discrimination` is how
+    cleanly the attack separates them -- 0.9 means the predicted outcome
+    occurs 90% of the time under its own hypothesis. A sharper attack
+    earns a higher information gain, which is exactly the ranking wanted:
+    a decisive cheap test should beat a fuzzy expensive one.
+    """
+    discrimination = (attack.discrimination if discrimination is None
+                      else discrimination)
+    if not 0.5 < discrimination < 1.0:
+        raise ValueError(
+            f"discrimination must be in (0.5, 1.0), got {discrimination}. At 0.5 the "
+            f"attack cannot discriminate at all; at 1.0 it claims certainty, which no "
+            f"experiment has.")
+    d, off = discrimination, 1.0 - discrimination
+    return CandidateExperiment(
+        candidate_id=f"attack:{attack.attack_id}",
+        description=attack.description,
+        cost_usd=attack.cost_usd,
+        resolves=f"{attack.targets.name} -- {attack.rationale}",
+        outcomes=[
+            Outcome(attack.prediction.if_genuine, {h_genuine: d, h_artifact: off}),
+            Outcome(attack.prediction.if_artifact, {h_genuine: off, h_artifact: d}),
+        ],
+    )
+
+
+def candidates_from_attacks(plan, discrimination: float | None = None,
+                            h_genuine: str = "H_genuine",
+                            h_artifact: str = "H_artifact") -> list[CandidateExperiment]:
+    return [candidate_from_attack(a, discrimination, h_genuine, h_artifact)
+            for a in plan.attacks]
+
+
 def next_experiment(exp: Experiment, report: AuditReport) -> CandidateExperiment | None:
     """The single cheapest piece of missing evidence, or None if the record
     has no gaps left to close."""
