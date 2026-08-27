@@ -31,6 +31,9 @@ from typing import Any, Optional
 
 from . import record
 from .adapters.base import ControlMeasurement
+from .adversary import AdversarialScientist, AttackPlan
+from .executor import AttackExecutor, AttackReport
+from .power import PowerAnalysis, analyze_experiment
 from .claim import CompiledClaim, compile_claim
 from .failure_modes import FailureAnalysis, classify
 from .planner import CandidateExperiment, candidates_from_audit, next_experiment
@@ -48,6 +51,8 @@ class AuditResult:
     claim: CompiledClaim
     gaps: list[CandidateExperiment] = field(default_factory=list)
     measurements: list[ControlMeasurement] = field(default_factory=list)
+    attacks: Optional[AttackPlan] = None
+    power: Optional[PowerAnalysis] = None
 
     @property
     def verdict(self) -> Verdict:
@@ -67,8 +72,20 @@ class AuditResult:
         narrow: PROMISING is not a pass, it is permission to keep working."""
         return self.verdict is Verdict.CERTIFIED_UNDER_SCOPE
 
+    @property
+    def open_attacks(self) -> list:
+        """Attacks the claim has not been subjected to. An untested
+        mechanism is not a mechanism that was ruled out."""
+        return list(self.attacks.attacks) if self.attacks else []
+
     def render(self) -> str:
         parts = [self.claim.render()]
+        if self.power is not None:
+            parts.append(f"\nSTATISTICAL POWER:\n  {self.power.summary()}")
+        if self.attacks and self.attacks.attacks:
+            parts.append(f"\nUNTESTED ATTACK SURFACE ({len(self.attacks.attacks)}):")
+            for a in self.attacks.attacks:
+                parts.append(f"  {a.attack_id}: {a.prediction.statistic}")
         if self.measurements:
             parts.append("\nEXECUTED BY THE AUDITOR:")
             for m in self.measurements:
@@ -98,7 +115,8 @@ class Auditor:
 
     # -- auditing ------------------------------------------------------
 
-    def audit(self, experiment: Experiment | str | Path | dict) -> AuditResult:
+    def audit(self, experiment: Experiment | str | Path | dict,
+              propose_attacks: bool = True) -> AuditResult:
         exp = self._coerce(experiment)
         report = _audit(exp)
         return AuditResult(
@@ -108,7 +126,39 @@ class Auditor:
             claim=compile_claim(exp, report),
             gaps=candidates_from_audit(exp, report),
             measurements=list(self._measurements),
+            attacks=(AdversarialScientist().propose(exp, report)
+                     if propose_attacks else None),
+            power=analyze_experiment(exp),
         )
+
+    # -- adversarial ---------------------------------------------------
+
+    def attack(self, experiment: Experiment | str | Path | dict) -> AttackPlan:
+        """Propose falsification experiments for a claim.
+
+        The proposer commits to what each outcome would mean before
+        anything runs, and never issues a verdict of its own.
+        """
+        exp = self._coerce(experiment)
+        return AdversarialScientist().propose(exp, _audit(exp))
+
+    def run_attacks(self, exp: Experiment, plan: AttackPlan | None = None,
+                    hooks: dict | None = None, **artifacts) -> AttackReport:
+        """Execute the attacks that can be run, and record what they found.
+
+        Findings are written back onto the record with MEASURED
+        provenance, so the verdict afterwards reflects what the auditor
+        established rather than what it was told.
+        """
+        plan = plan or self.attack(exp)
+        executor = AttackExecutor(adapter=self.adapter, hooks=hooks)
+        report = executor.run(exp, plan, **artifacts)
+        for outcome in report.outcomes:
+            if outcome.measurement is not None:
+                exp.controls.record_measured(outcome.measurement.control,
+                                             outcome.measurement.passed)
+                self._measurements.append(outcome.measurement)
+        return report
 
     @staticmethod
     def _coerce(experiment: Experiment | str | Path | dict) -> Experiment:

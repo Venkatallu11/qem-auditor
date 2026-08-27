@@ -14,7 +14,9 @@ from .schema import (
 )
 from .verdict import AuditReport, Verdict, audit
 from .api import AuditResult, Auditor
-from . import record
+from . import active_design, blind, power, provenance, record
+from .adversary import AdversarialScientist, Attack, AttackPlan, Prediction
+from .executor import AttackExecutor, AttackReport
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 
 __all__ = [
@@ -23,5 +25,8 @@ __all__ = [
     "TranspilationStatus", "UncertaintyCoverage",
     "AuditReport", "Verdict", "audit",
     "Auditor", "AuditResult", "record",
+    "AdversarialScientist", "Attack", "AttackPlan", "Prediction",
+    "AttackExecutor", "AttackReport",
+    "active_design", "blind", "power", "provenance",
     "Diagnosis", "FailureAnalysis", "classify",
 ]
