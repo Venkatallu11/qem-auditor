@@ -37,7 +37,7 @@ not yet CERTIFIED, because full 8-draw replication isn't complete and
 there is no full real-hardware energy validation, even though every hard
 gate and the chemical-accuracy bar are currently clean.
 """
-from qem_auditor import Controls, Experiment, Outputs
+from qem_auditor import Controls, Experiment, Outputs, Verdict
 
 EXPERIMENT = Experiment(
     experiment_id="h4_ancilla_qed_conditioned_pec",
@@ -66,3 +66,9 @@ EXPERIMENT = Experiment(
         "spot-checks (not a full energy reconstruction) are consistent with the simulator."
     ),
 )
+
+# Asserted by run_benchmarks.py. The point of pinning this one is the
+# opposite of the ZNE case: the auditor must keep REFUSING to certify the
+# project's own best result while replication and real-hardware validation
+# are incomplete, no matter how clean the hard gates look.
+EXPECTED_VERDICT = Verdict.PROMISING

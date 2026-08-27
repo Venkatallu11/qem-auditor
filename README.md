@@ -18,11 +18,17 @@ propose experiments, interpret literature, and write up what happened in
 prose, but it never gets to grade its own work.
 
 ```
-VERDICT = INVALID                              a hard gate actively failed
+VERDICT = INVALID RECORD                        the record contradicts itself; unauditable
+VERDICT = INVALID                               a hard gate actively failed
 VERDICT = NOT ESTABLISHED                       not enough evidence yet
 VERDICT = PROMISING / REQUIRES CERTIFICATION    clean so far, not fully proven
 VERDICT = CERTIFIED UNDER SCOPE                 every gate passed, full replication done
 ```
+
+Two rules do most of the work. A hard gate that *failed* forces `INVALID`
+no matter how good the rest of the evidence looks. A hard gate that was
+never *run* is not a pass — it caps the verdict at `NOT ESTABLISHED`,
+because silence is not evidence.
 
 ## Why this, and why now
 
@@ -38,9 +44,9 @@ a joint-frame optimizer with catastrophic local minima, and — eventually
 those failures were caught by hand, one at a time, over weeks. This
 project turns that manual discipline into reusable, automated gates.
 
-## Status: Phase 1
+## Status: Phase 2
 
-This is early. What exists right now:
+What exists right now:
 
 - `qem_auditor/schema.py` — the `Experiment` record: controls, outputs,
   nothing else. No verdict field — verdicts are computed, never asserted
@@ -48,11 +54,20 @@ This is early. What exists right now:
 - `qem_auditor/gates.py` — five gates: ideal control, target leakage,
   adversarial controls, reproducibility (against this project's own
   established 8-replicate convention), and a chemical-accuracy bar.
+- `qem_auditor/integrity.py` — checks the record against *itself* before
+  any gate runs: negative error magnitudes, a Q95 envelope tighter than
+  the point error it envelopes, `reproducibility_checked` asserted with
+  no replicate data, a headline number its own replicates don't support
+  (the best-draw-as-result pattern). These produce `INVALID RECORD`,
+  deliberately distinct from `INVALID` — "your evidence is incoherent"
+  is a different claim from "your method failed."
 - `qem_auditor/verdict.py` — combines gate results into one verdict. Hard
   gates can force `INVALID` on their own; no amount of good replication
-  data overrides a broken ideal control.
+  data overrides a broken ideal control, and an unrun hard gate never
+  counts as a passed one.
 - `benchmarks/` — two **real** cases, not synthetic test fixtures, pulled
-  directly from `quantum-chemistry-vqe`'s own research ledger:
+  directly from `quantum-chemistry-vqe`'s own research ledger, each
+  pinned to the verdict it is known to deserve:
   - `h4_zne_blowup.py` — the real 513x ZNE blowup. Expected and actual
     verdict: `INVALID`.
   - `h4_ancilla_qed.py` — the project's current best real result (ancilla
@@ -61,11 +76,21 @@ This is early. What exists right now:
     *not* `CERTIFIED`, because full 8-draw replication and a full
     real-hardware energy validation aren't done yet, even though every
     hard gate is currently clean.
+- `tests/` — 53 stdlib `unittest` cases covering every gate on all three
+  of its outcomes (pass / fail / not-enough-data), verdict precedence,
+  record integrity, and the two real benchmarks.
+
+Writing that suite immediately paid for itself: it found that an
+otherwise-perfect record whose adversarial controls had *never been run*
+would audit to `CERTIFIED UNDER SCOPE` — the exact failure mode this
+project exists to prevent, sitting in the project itself. Fixed in
+`verdict.py`; pinned by `tests/test_verdict.py`.
 
 Run it:
 
 ```bash
-python run_benchmarks.py
+python run_benchmarks.py                    # real cases, exits non-zero on a wrong verdict
+python -m unittest discover -s tests -t .   # full suite
 ```
 
 ## Roadmap (not yet built)
@@ -82,7 +107,7 @@ python run_benchmarks.py
   (`P(H_i | data)`), not just pass/fail per experiment.
 
 None of this is built yet on purpose — the gates need to be trustworthy
-on real historical data first, which is what Phase 1 is for.
+on real historical data first, which is what Phases 1-2 are for.
 
 ## Relationship to quantum-chemistry-vqe
 

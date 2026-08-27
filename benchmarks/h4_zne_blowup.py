@@ -19,7 +19,7 @@ noiseless model doesn't recover a sane result, the method is broken
 before hardware noise even enters the picture. Expected auditor verdict:
 INVALID.
 """
-from qem_auditor import Controls, Experiment, Outputs
+from qem_auditor import Controls, Experiment, Outputs, Verdict
 
 EXPERIMENT = Experiment(
     experiment_id="h4_all_gate_zne_ideal_control",
@@ -50,3 +50,8 @@ EXPERIMENT = Experiment(
         "the extrapolation direction production actually uses."
     ),
 )
+
+# What this case must audit to. Asserted by run_benchmarks.py: if a change
+# to the gates ever stops flagging the 513x blowup, the suite fails loudly
+# rather than quietly re-blessing a known-bad result.
+EXPECTED_VERDICT = Verdict.INVALID
