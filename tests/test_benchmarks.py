@@ -64,11 +64,25 @@ class ZneBlowupCaseTest(unittest.TestCase):
 class AncillaQedCaseTest(unittest.TestCase):
     def test_all_hard_gates_are_clean(self):
         from benchmarks.h4_ancilla_qed import EXPERIMENT
+        from qem_auditor.verdict import HARD_GATES, _name
 
+        hard = {_name(g) for g in HARD_GATES}
         report = audit(EXPERIMENT)
         for g in report.gate_results:
-            with self.subTest(gate=g.name):
-                self.assertIsNot(g.passed, False)
+            if g.name in hard:
+                with self.subTest(gate=g.name):
+                    self.assertIsNot(g.passed, False)
+
+    def test_it_is_a_self_reported_record_and_says_so(self):
+        """Every H4 case is transcribed from a ledger, not executed by the
+        auditor. That is stated by the record rather than glossed."""
+        from benchmarks.h4_ancilla_qed import EXPERIMENT
+
+        report = audit(EXPERIMENT)
+        verification = next(g for g in report.gate_results
+                            if g.name == "independent_verification")
+        self.assertIs(verification.passed, False)
+        self.assertIn("self-reported", verification.reason)
 
     def test_it_still_refuses_to_certify(self):
         """Clean hard gates are not certification. 4 of 8 replication draws

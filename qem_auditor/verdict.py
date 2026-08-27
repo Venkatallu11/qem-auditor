@@ -67,6 +67,10 @@ REQUIRED_FOR_CERTIFICATION = (
     gates.replicate_independence_gate,
     gates.tail_risk_gate,
     gates.evidence_scope_gate,
+    # Certification is the one verdict that says "believe this". It should
+    # not rest on the claimant's word for anything the auditor could have
+    # checked itself.
+    gates.independent_verification_gate,
 )
 
 

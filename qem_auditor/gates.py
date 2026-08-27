@@ -19,6 +19,7 @@ from typing import Optional
 
 from .schema import (
     Experiment,
+    Provenance,
     FailureMode,
     ReplicateKind,
     TranspilationStatus,
@@ -360,6 +361,49 @@ def improvement_gate(exp: Experiment, min_ratio: float = 1.0) -> GateResult:
                       [] if passed else [FailureMode.UNDER_POWERED])
 
 
+# Controls an auditor can execute itself against the claimant's artifacts,
+# rather than take on trust. The rest (target leakage, adversarial design,
+# free-parameter floors) are procedural or domain-specific and currently
+# depend on honest reporting -- which is stated plainly rather than papered
+# over.
+AUDITOR_VERIFIABLE = ("unitary_equivalence", "ideal_control", "determinism_check")
+
+
+def independent_verification_gate(exp: Experiment) -> GateResult:
+    """How much of this record did the auditor check for itself?
+
+    A control the claimant asserts is a statement about their own work. A
+    control the auditor executed is evidence. For the claimant's own
+    project the distinction may not matter -- for a third party's claim it
+    is the whole point, since a gate that trusts the claimant is not a
+    gate.
+
+    Never a hard failure: an honestly self-reported record is not a false
+    one, and plenty of real evidence cannot be re-executed by a third
+    party. It does block certification, which is a different bar.
+    """
+    verifiable = [c for c in AUDITOR_VERIFIABLE if getattr(exp.controls, c) is not None]
+    if not verifiable:
+        return GateResult("independent_verification", None,
+                          "no auditor-verifiable control has been run at all")
+    measured = [c for c in verifiable
+                if exp.controls.provenance_of(c) is Provenance.MEASURED]
+    unmeasured = [c for c in verifiable if c not in measured]
+    if not measured:
+        return GateResult("independent_verification", False,
+                          f"every control is self-reported ({', '.join(unmeasured)}) -- "
+                          f"nothing here was checked independently",
+                          [FailureMode.UNKNOWN])
+    if unmeasured:
+        return GateResult("independent_verification", False,
+                          f"measured by the auditor: {', '.join(measured)}; still "
+                          f"self-reported: {', '.join(unmeasured)}",
+                          [FailureMode.UNKNOWN])
+    return GateResult("independent_verification", True,
+                      f"every auditor-verifiable control was executed by the auditor "
+                      f"({', '.join(measured)})")
+
+
 ALL_GATES = [
     ideal_control_gate,
     unitary_equivalence_gate,
@@ -372,6 +416,7 @@ ALL_GATES = [
     reproducibility_gate,
     tail_risk_gate,
     evidence_scope_gate,
+    independent_verification_gate,
     chemical_accuracy_gate,
     improvement_gate,
 ]

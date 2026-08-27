@@ -12,6 +12,7 @@ from qem_auditor import (
     Experiment,
     NoiseSpec,
     Outputs,
+    Provenance,
     Replicate,
     ReplicateKind,
     TranspilationStatus,
@@ -44,6 +45,12 @@ def make_experiment(**overrides) -> Experiment:
         uncertainty=UncertaintyCoverage(shot_noise=True, method_monte_carlo=True,
                                         cross_submission=True, noise_model=True),
     )
+    # The baseline fixture is the "everything done right" record, which
+    # includes the auditor having executed the controls it can execute --
+    # otherwise nothing could ever certify.
+    for control in ("unitary_equivalence", "ideal_control", "determinism_check"):
+        controls.provenance[control] = Provenance.MEASURED
+
     exp = Experiment(
         experiment_id="fixture",
         description="clean fully-certifiable fixture",

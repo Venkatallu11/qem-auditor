@@ -54,29 +54,107 @@ a joint-frame optimizer with catastrophic local minima, and — eventually
 those failures were caught by hand, one at a time, over weeks. This
 project turns that manual discipline into reusable, automated gates.
 
-## Status: Phase 4
+## Status: Phase 5
 
 ```
 qem_auditor/
   schema.py         the experiment record
+  record.py         read/write records as JSON
   integrity.py      is this record even readable?
-  gates.py          13 gates, each from a real disqualification
+  gates.py          14 gates, each from a real disqualification
   verdict.py        gate results -> one verdict
   failure_modes.py  why it failed, and the cheapest fix
   hypothesis.py     competing explanations, Bayesian, carried across experiments
   planner.py        what to run next, by information gain per dollar
   claim.py          what has been shown, what has not, what closes the gap
+  api.py            the Auditor facade
+  cli.py            python -m qem_auditor
+  adapters/         execute controls instead of trusting them (optional, needs qiskit)
 benchmarks/         6 real QEM-Trust cases
-tests/              120 tests, stdlib only
+examples/           end-to-end verification of a ZNE claim
+tests/              168 tests
 ```
+
+## Using it on your own experiment
+
+No Python required for the basic path:
+
+```bash
+python -m qem_auditor template > my_experiment.json   # a blank record to fill in
+python -m qem_auditor validate my_experiment.json     # is it readable and self-consistent?
+python -m qem_auditor audit my_experiment.json        # the verdict, why, and what to run next
+python -m qem_auditor audit my_experiment.json --json # machine-readable, for CI
+```
+
+Exit codes are meant for CI, so a claim cannot quietly regress: `0` certified,
+`1` anything else, `2` the record could not be read.
+
+From Python:
+
+```python
+from qem_auditor import Auditor
+
+result = Auditor().audit("my_experiment.json")
+result.verdict            # Verdict.NOT_ESTABLISHED
+result.failure_modes      # [FailureMode.UNDER_POWERED, ...]
+result.next_experiment    # the cheapest missing evidence
+print(result.render())
+```
+
+### Grading a record vs verifying a claim
+
+With no adapter, the auditor grades the record **as written** — it checks
+whether you *claim* the ideal control passed. That is useful for your own
+work and worthless against a stranger's, because a gate that trusts the
+claimant is not a gate.
+
+With an adapter it executes the controls it can:
+
+```python
+from qem_auditor.adapters.qiskit_adapter import QiskitAdapter
+
+auditor = Auditor(adapter=QiskitAdapter())
+auditor.verify_fold_survival(exp, base=base_circuit, submitted=submitted_circuit)
+auditor.verify_ideal_control(exp, circuit, observable, my_mitigation_pipeline)
+auditor.verify_determinism(exp, my_pipeline)
+result = auditor.audit(exp)
+```
+
+Every control carries `Provenance` — `SELF_REPORTED` or `MEASURED` — and
+`CERTIFIED UNDER SCOPE` requires that everything the auditor *could* have
+checked, it did. Three controls are mechanizable today:
+
+| control | what the auditor runs | the failure it catches |
+|---|---|---|
+| fold survival | builds both circuits, transpiles, compares unitary **and** gate count | fold pairs optimized back out before submission |
+| ideal control | runs *your* mitigation against a noiseless model with shot noise | an estimator that amplifies statistical noise (the 513x) |
+| determinism | runs the identical computation N times and diffs | hash-order nondeterminism tipping a nonconvex solver |
+
+Target leakage, adversarial design, and free-parameter floors are
+procedural or domain-specific and still rest on honest reporting. The
+auditor says so rather than papering over it —
+`independent_verification` reports exactly which controls were measured
+and which were taken on trust.
+
+The fold-survival check is worth a note. A ZNE fold pair is *supposed* to
+leave the unitary unchanged, so a unitary-equivalence check passes happily
+while the transpiler removes the pairs — leaving an "amplified" arm with
+the same noise as the unamplified one, and an extrapolation fitting a
+slope through a variable that never varied. Both halves have to be checked
+at once. `examples/verify_zne_claim.py` demonstrates this against the real
+Qiskit transpiler: `optimization_level=3` cancels the folds and audits to
+`INVALID`; `optimization_level=0` preserves them.
 
 Run it:
 
 ```bash
 python run_benchmarks.py                    # the 6 real cases; non-zero exit on a wrong verdict
 python run_audit_loop.py                    # the closed loop, replayed on real history
+python examples/verify_zne_claim.py         # end-to-end verification (needs qiskit)
 python -m unittest discover -s tests -t .   # full suite
 ```
+
+Installing nothing runs everything except the adapters, which skip.
 
 ### The record
 
@@ -170,13 +248,15 @@ shot noise was 0.0037 against the method's own Monte Carlo at 2.11.
   models, and seed perturbations itself, rather than checking that a
   human ran them. The gates already encode what must be survived; what
   is missing is a proposer.
-- **Backend adapters**: generalize beyond IonQ (Aer, IBM, Quantinuum).
-  The `Experiment` schema is already backend-agnostic; nothing in the
-  gates mentions a vendor.
-- **Auditor mode**: point it at someone else's QEM paper or repository
-  and ask whether the claimed improvement is credible. The verdict
-  vocabulary and the gates are the same; only the record's provenance
-  changes.
+- **More measured controls**: adversarial controls are the biggest prize
+  left — the gates already encode what a negative control must do
+  (fail loudly), so what is missing is a generator that produces the
+  shuffled labels, wrong-parity postselections and sign flips itself
+  rather than checking that a human ran them.
+- **Noisy-backend adapters**: the Qiskit adapter currently uses exact
+  statevectors plus sampled shot noise, which is what the ideal control
+  needs. Running claims against Aer noise models, IBM, or Quantinuum is
+  the same interface with a different expectation oracle.
 - **Learned priors**: with enough records across molecules, backends and
   methods, `P(mitigation succeeds | circuit features)` becomes
   estimable — useful for pricing an experiment before running it. This

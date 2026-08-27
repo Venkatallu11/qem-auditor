@@ -106,6 +106,19 @@ class ClaimType(Enum):
     RELATIVE_IMPROVEMENT = "this method beats a stated baseline method"
 
 
+class Provenance(Enum):
+    """Where a control's value came from.
+
+    This is the difference between a rubric and a verifier. A control the
+    claimant asserts is a statement about their own work; a control the
+    auditor executed is evidence. Both are recorded, and they are never
+    conflated -- an auditor that trusts the claimant is not a gate.
+    """
+
+    SELF_REPORTED = "asserted by whoever wrote the record"
+    MEASURED = "executed by the auditor against the claimant's artifacts"
+
+
 class TranspilationStatus(Enum):
     """Whether the circuit that RAN is the circuit that was designed.
 
@@ -205,6 +218,26 @@ class Controls:
     determinism_check: Optional[bool] = None
     """Does re-running the identical computation on identical inputs give
     an identical result?"""
+
+    provenance: dict[str, Provenance] = field(default_factory=dict)
+    """Per-control: SELF_REPORTED (the default for anything absent) or
+    MEASURED. Set by adapters when the auditor runs a control itself."""
+
+    def provenance_of(self, control: str) -> Provenance:
+        return self.provenance.get(control, Provenance.SELF_REPORTED)
+
+    def record_measured(self, control: str, value: Optional[bool]) -> None:
+        """Sets a control from the auditor's own execution, marking it as
+        measured. Refuses unknown names so a typo cannot silently create a
+        control nothing reads."""
+        if not hasattr(self, control) or control == "provenance":
+            raise AttributeError(f"no such control: {control}")
+        setattr(self, control, value)
+        self.provenance[control] = Provenance.MEASURED
+
+    @property
+    def measured_controls(self) -> list[str]:
+        return sorted(k for k, v in self.provenance.items() if v is Provenance.MEASURED)
 
 
 @dataclass

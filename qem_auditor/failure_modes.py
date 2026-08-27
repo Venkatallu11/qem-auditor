@@ -60,12 +60,21 @@ class FailureAnalysis:
                 print(f"    remedy:   {d.remedy}")
 
 
-def classify(exp: Experiment, report: AuditReport) -> FailureAnalysis:
+def classify(exp: Experiment, report: AuditReport,
+             measurements: list | None = None) -> FailureAnalysis:
     """Derives failure modes from the gate results and the record's own
-    numbers. Ordered most-confident first."""
+    numbers. Ordered most-confident first.
+
+    When an adapter executed a control, its raw evidence is passed in and
+    used in preference to the record's self-reported numbers -- the
+    auditor's own measurement is better evidence than the claimant's
+    summary of it, and it carries detail (an amplification ratio, a
+    per-run spread) the record's fields cannot express.
+    """
     found: list[Diagnosis] = []
     by_name = {g.name: g for g in report.gate_results}
     out = exp.outputs
+    measured = {m.control: m for m in (measurements or [])}
 
     def gate_failed(name: str) -> bool:
         g = by_name.get(name)
@@ -76,8 +85,10 @@ def classify(exp: Experiment, report: AuditReport) -> FailureAnalysis:
     if gate_failed("unitary_equivalence"):
         found.append(Diagnosis(
             FailureMode.COMPILER_CANCELLATION, 0.95,
-            "the submitted circuit was verified NOT to implement the intended unitary, "
-            "so every downstream number describes a circuit nobody intended to run",
+            "the circuit that would execute is not the circuit that was designed -- either "
+            "it does not implement the intended unitary, or deliberately-inserted "
+            "noise-amplifying gates did not survive transpilation, leaving an 'amplified' "
+            "arm carrying the same noise as the unamplified one",
             "fold or modify AFTER transpilation and submit with no further transpiler "
             "passes; verify the submitted circuit, not the constructed one"))
 
@@ -115,7 +126,19 @@ def classify(exp: Experiment, report: AuditReport) -> FailureAnalysis:
     if gate_failed("ideal_control"):
         # An ideal control fails for a reason. If mitigation made a
         # noiseless case dramatically worse, that is conditioning, not noise.
-        if out.raw_error_kcal not in (None, 0) and out.mitigated_error_kcal is not None:
+        m = measured.get("ideal_control")
+        if m is not None and m.evidence.get("amplification"):
+            amp = m.evidence["amplification"]
+            found.append(Diagnosis(
+                FailureMode.EXTRAPOLATION_INSTABILITY, 0.9,
+                f"the auditor ran the pipeline against a noiseless model and measured "
+                f"{amp:.1f}x error amplification "
+                f"({m.evidence['raw_error']:.6g} -> {m.evidence['mitigated_error']:.6g}) "
+                f"-- with zero physical noise to correct, the estimator is amplifying "
+                f"shot noise, so the failure is numerical conditioning, not hardware",
+                "quantify the estimator's conditioning at the production point and "
+                "compare against its coefficient norm before any hardware spend"))
+        elif out.raw_error_kcal not in (None, 0) and out.mitigated_error_kcal is not None:
             ratio = out.mitigated_error_kcal / out.raw_error_kcal
             if ratio > 2:
                 found.append(Diagnosis(
