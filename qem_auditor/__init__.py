@@ -14,9 +14,11 @@ from .schema import (
 )
 from .verdict import AuditReport, Verdict, audit
 from .api import AuditResult, Auditor
-from . import active_design, blind, power, provenance, record
+from . import active_design, blind, llm, power, provenance, record, report
 from .adversary import AdversarialScientist, Attack, AttackPlan, Prediction
 from .executor import AttackExecutor, AttackReport
+from .agent import AuditAgent, Investigation
+from .llm_scientist import LLMAdversary
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 
 __all__ = [
@@ -27,6 +29,7 @@ __all__ = [
     "Auditor", "AuditResult", "record",
     "AdversarialScientist", "Attack", "AttackPlan", "Prediction",
     "AttackExecutor", "AttackReport",
-    "active_design", "blind", "power", "provenance",
+    "active_design", "blind", "llm", "power", "provenance", "report",
+    "AuditAgent", "Investigation", "LLMAdversary",
     "Diagnosis", "FailureAnalysis", "classify",
 ]

@@ -37,8 +37,11 @@ jobs:
           qem-auditor audit  /tmp/t.json > /dev/null; audit=$?
           qem-auditor attack /tmp/t.json > /dev/null; attack=$?
           qem-auditor blind  /tmp/t.json > /dev/null; blind=$?
+          qem-auditor investigate /tmp/t.json --html /tmp/r.html > /dev/null; inv=$?
           set -e
-          echo "audit=$audit attack=$attack blind=$blind"
+          echo "audit=$audit attack=$attack blind=$blind investigate=$inv"
+          test -s /tmp/r.html      # the HTML report is non-empty
+          test "$inv" -eq 1        # nothing certified, so non-zero
           test "$audit"  -eq 1   # not certified
           test "$attack" -eq 1   # attack surface untested
           test "$blind"  -eq 0   # blind decision was correct
@@ -55,3 +58,4 @@ jobs:
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
+      - run: python examples/autonomous_audit.py

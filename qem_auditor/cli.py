@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import record
 from .api import Auditor
@@ -88,8 +89,16 @@ def _cmd_audit(args) -> int:
                  "cost_usd": result.next_experiment.cost_usd}
                 if result.next_experiment else None),
         }, indent=2))
+    elif args.html:
+        from .report import render_console, render_html
+
+        print(render_console(exp))
+        Path(args.html).write_text(render_html(exp))
+        print(f"\nwrote {args.html}")
     else:
-        result.print_result()
+        from .report import render_console
+
+        print(render_console(exp))
 
     return EXIT_OK if result.verdict is Verdict.CERTIFIED_UNDER_SCOPE else EXIT_NOT_CERTIFIED
 
@@ -111,6 +120,49 @@ def _cmd_validate(args) -> int:
         return EXIT_BAD_RECORD
     print(f"{exp.experiment_id}: record is well-formed and internally consistent")
     return EXIT_OK
+
+
+def _cmd_investigate(args) -> int:
+    """Hand it a record; it audits, attacks, and decides when to stop."""
+    try:
+        exp = record.load(args.path)
+    except RecordError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+    from .agent import AuditAgent
+    from .llm import LLMError, provider_from_env
+    from .report import render_console, render_html
+
+    try:
+        provider = provider_from_env()
+    except LLMError as e:
+        print(f"note: {e}", file=sys.stderr)
+        provider = None
+
+    adapter = None
+    if args.qiskit:
+        try:
+            from .adapters.qiskit_adapter import QiskitAdapter
+
+            adapter = QiskitAdapter()
+        except Exception as e:  # qiskit missing or unusable
+            print(f"note: qiskit adapter unavailable ({e}); attacks needing it "
+                  f"will be reported as not run", file=sys.stderr)
+
+    agent = AuditAgent(adapter=adapter, provider=provider,
+                       max_rounds=args.max_rounds, budget_usd=args.budget)
+    investigation = agent.investigate(exp)
+    investigation.print_investigation()
+    print()
+    print(render_console(exp, investigation))
+
+    if args.html:
+        Path(args.html).write_text(render_html(exp, investigation))
+        print(f"\nwrote {args.html}")
+    from .verdict import Verdict as _V
+
+    return EXIT_OK if investigation.verdict is _V.CERTIFIED_UNDER_SCOPE \
+        else EXIT_NOT_CERTIFIED
 
 
 def _cmd_attack(args) -> int:
@@ -181,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("path", help="path to a JSON experiment record")
     p_audit.add_argument("--json", action="store_true",
                          help="emit machine-readable output")
+    p_audit.add_argument("--html", metavar="PATH",
+                         help="also write a self-contained HTML report")
     p_audit.set_defaults(func=_cmd_audit)
 
     p_validate = sub.add_parser(
@@ -193,6 +247,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_attack.add_argument("path")
     p_attack.add_argument("--json", action="store_true")
     p_attack.set_defaults(func=_cmd_attack)
+
+    p_inv = sub.add_parser(
+        "investigate",
+        help="run the audit loop autonomously: audit, attack, execute, repeat")
+    p_inv.add_argument("path")
+    p_inv.add_argument("--max-rounds", type=int, default=4)
+    p_inv.add_argument("--budget", type=float, default=None,
+                       help="spending cap in USD for executable attacks")
+    p_inv.add_argument("--qiskit", action="store_true",
+                       help="use the Qiskit adapter to execute attacks")
+    p_inv.add_argument("--html", metavar="PATH",
+                       help="also write a self-contained HTML report")
+    p_inv.set_defaults(func=_cmd_investigate)
 
     p_blind = sub.add_parser(
         "blind", help="audit the record with its outcome hidden, then reveal")
