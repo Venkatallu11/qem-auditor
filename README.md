@@ -252,6 +252,48 @@ commit fail to identify the code that ran.
 Stated plainly: these are content hashes, not signatures. They detect
 change; they do not authenticate.
 
+## Check a circuit
+
+The front door. Two commands, no record to write:
+
+```bash
+qem-auditor check --template > my_circuit.py   # a starting point
+qem-auditor check my_circuit.py                # the verdict
+```
+
+You define `circuit`, and optionally `observable`, `mitigator`,
+`submitted_circuit` and `amplified_circuit`. The auditor reads the gate
+counts, qubits and basis off the circuit itself and **executes** every
+control it can:
+
+```
+EXECUTED BY THE AUDITOR
+  [PASS] unitary_equivalence: submitted circuit implements the intended unitary
+  [PASS] ideal_control: mitigation is not pathologically conditioned (1.4x)
+  [PASS] determinism_check: 3 identical runs produced identical results
+
+OUTSIDE WHAT THIS CHECK CAN ESTABLISH
+  target_leakage: whether the known answer influenced tuning -- procedural,
+                  and not visible in a circuit
+  adversarial: needs your own fitting code to shuffle and refit
+  free_parameter_floor: needs your method's parameters
+  reproducibility: the auditor cannot run your submissions for you
+```
+
+Those two lists are the point. The auditor never fills in a control it
+did not measure, and it says plainly which parts of a `NOT ESTABLISHED`
+are your method's problem and which are simply outside what anyone could
+check from a circuit. **Certification is structurally unreachable from
+artifacts alone**, and that is correct rather than a limitation to work
+around.
+
+One subtlety worth knowing, because it cost this project a real result:
+if your pipeline inserts gates deliberately (ZNE folding), define
+`amplified_circuit` too. A fold pair is *supposed* to leave the unitary
+unchanged, so an equivalence check passes happily while the transpiler
+removes the pairs — the auditor has to be told the gates were inserted on
+purpose before it can check they survived.
+
 ## Install
 
 ```bash

@@ -59,3 +59,12 @@ jobs:
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
       - run: python examples/autonomous_audit.py
+      # The front door: the starting point we hand people must actually run.
+      - run: |
+          qem-auditor check --template > /tmp/c.py
+          python -c "compile(open('/tmp/c.py').read(),'t','exec')"
+          set +e
+          qem-auditor check /tmp/c.py > /dev/null; chk=$?
+          set -e
+          echo "check=$chk"
+          test "$chk" -eq 1   # measured what it could; cannot certify from artifacts

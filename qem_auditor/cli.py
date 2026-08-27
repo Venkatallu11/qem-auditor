@@ -122,6 +122,98 @@ def _cmd_validate(args) -> int:
     return EXIT_OK
 
 
+def _load_module(path: str):
+    """Load a user's Python file so their circuit and pipeline are audited
+    as they actually wrote them.
+
+    This executes the file. That is inherent to auditing a real pipeline --
+    a mitigation function has to run to be tested -- and it is the user's
+    own code, but it is worth stating rather than leaving quiet.
+    """
+    import importlib.util
+
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"no such file: {p}")
+    spec = importlib.util.spec_from_file_location(p.stem, p)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {p} as a Python module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _cmd_check(args) -> int:
+    """Audit a circuit directly. The front door."""
+    from .templates import CHECK_TEMPLATE
+
+    if args.template:
+        print(CHECK_TEMPLATE)
+        return EXIT_OK
+    if not args.path:
+        print("error: give a Python file, or --template for a starting point",
+              file=sys.stderr)
+        return EXIT_BAD_RECORD
+    try:
+        module = _load_module(args.path)
+    except Exception as e:
+        print(f"error: could not load {args.path}: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    circuit = getattr(module, "circuit", None)
+    if circuit is None:
+        print(f"error: {args.path} defines no `circuit`. Run "
+              f"`qem-auditor check --template > my_circuit.py` for a starting point.",
+              file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    from .api import Auditor
+    from .report import render_console, render_html
+
+    adapter = None
+    try:
+        from .adapters.qiskit_adapter import QiskitAdapter
+
+        adapter = QiskitAdapter()
+    except Exception as e:
+        print(f"note: qiskit unavailable ({e}); nothing can be executed, so every "
+              f"control is reported as not run", file=sys.stderr)
+
+    result = Auditor(adapter=adapter).verify(
+        circuit=circuit,
+        observable=getattr(module, "observable", None),
+        mitigator=getattr(module, "mitigator", None),
+        submitted_circuit=getattr(module, "submitted_circuit", None),
+        amplified_circuit=getattr(module, "amplified_circuit", None),
+        claim=getattr(module, "claim", ""),
+        backend=getattr(module, "backend", "unspecified"),
+        shots=getattr(module, "shots", 20_000),
+        replicate_errors=getattr(module, "replicate_errors", ()),
+    )
+
+    print(render_console(result.experiment))
+    if result.measurements:
+        print()
+        print("EXECUTED BY THE AUDITOR")
+        for m in result.measurements:
+            mark = "PASS" if m.passed is True else "FAIL" if m.passed is False else "N/A"
+            print(f"  [{mark}] {m.control}: {m.detail}")
+    if result.outside_scope:
+        print()
+        print("OUTSIDE WHAT THIS CHECK CAN ESTABLISH")
+        for name, why in result.outside_scope:
+            print(f"  {name}: {why}")
+
+    if args.html:
+        Path(args.html).write_text(render_html(result.experiment))
+        print(f"\nwrote {args.html}")
+    if args.save:
+        record.save(result.experiment, args.save)
+        print(f"wrote {args.save}")
+
+    return EXIT_OK if result.passed else EXIT_NOT_CERTIFIED
+
+
 def _cmd_investigate(args) -> int:
     """Hand it a record; it audits, attacks, and decides when to stop."""
     try:
@@ -228,6 +320,19 @@ def build_parser() -> argparse.ArgumentParser:
         prog="qem-auditor",
         description="Audit a quantum error-mitigation claim against its evidence.")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_check = sub.add_parser(
+        "check", help="audit a circuit directly -- the front door")
+    p_check.add_argument("path", nargs="?",
+                         help="a Python file defining `circuit` (and optionally "
+                              "observable, mitigator, submitted_circuit, claim)")
+    p_check.add_argument("--template", action="store_true",
+                         help="print a starting-point file and exit")
+    p_check.add_argument("--html", metavar="PATH",
+                         help="also write a self-contained HTML report")
+    p_check.add_argument("--save", metavar="PATH",
+                         help="also save the derived experiment record as JSON")
+    p_check.set_defaults(func=_cmd_check)
 
     p_audit = sub.add_parser("audit", help="audit an experiment record")
     p_audit.add_argument("path", help="path to a JSON experiment record")
