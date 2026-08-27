@@ -54,7 +54,11 @@ a joint-frame optimizer with catastrophic local minima, and — eventually
 those failures were caught by hand, one at a time, over weeks. This
 project turns that manual discipline into reusable, automated gates.
 
-## Status: Phase 5
+## Status: v0.2 — the adversarial experiment engine
+
+The jump in v0.2 is from **auditing experiments supplied to it** to
+**generating and executing the cheapest experiment capable of falsifying
+the claim**.
 
 ```
 qem_auditor/
@@ -67,13 +71,123 @@ qem_auditor/
   hypothesis.py     competing explanations, Bayesian, carried across experiments
   planner.py        what to run next, by information gain per dollar
   claim.py          what has been shown, what has not, what closes the gap
+  adversary.py      generates falsification experiments  (v0.2)
+  executor.py       runs them; never pretends about what it could not run  (v0.2)
+  power.py          how much evidence would actually be enough  (v0.2)
+  active_design.py  when more data cannot help, and what to run instead  (v0.2)
+  provenance.py     content-addressed evidence bundles  (v0.2)
+  blind.py          audit without seeing the answer  (v0.2)
   api.py            the Auditor facade
   cli.py            python -m qem_auditor
   adapters/         execute controls instead of trusting them (optional, needs qiskit)
 benchmarks/         6 real QEM-Trust cases
-examples/           end-to-end verification of a ZNE claim
-tests/              168 tests
+examples/           end-to-end verification, and the full adversarial loop
+tests/              291 tests
 ```
+
+### The loop
+
+```
+claim -> audit -> what can still be wrong -> generate adversaries
+      -> execute -> formal audit -> belief update -> next experiment
+```
+
+The division of labour is what keeps a proposer in the loop without
+letting it grade itself:
+
+| | says |
+|---|---|
+| the proposer | "this attack should distinguish H1 from H2, and here is what each outcome would mean" |
+| the executor | runs the attack |
+| the gates | what actually happened |
+
+The proposer commits to what each outcome means **before** anything runs,
+so it cannot reinterpret a bad result afterwards. `AdversarialScientist`
+has no API for issuing a verdict, and a test keeps it that way.
+
+### The failure grammar
+
+Nine transformations, each from a failure this project actually suffered,
+and they compose:
+
+`T_label` `T_sign` `T_seed` `T_calibration` `T_compiler`
+`T_extrapolation` `T_shot` `T_leakage` `T_correlation`
+
+An attack is only an attack if it predicts **different** outcomes under
+"genuine" and "artifact". `Prediction` refuses to be constructed
+otherwise — an experiment both hypotheses predict identically will
+confirm whatever you already believe.
+
+Composition is deliberate: the H4 robustness envelope was `T_calibration`
+composed with a coherent-error transformation, and it behaved nothing like
+either alone (per-instance coherent bias gave Q95 = 827 kcal/mol, the same
+magnitude applied per gate *type* gave 0.21). An auditor that only tests
+one transformation at a time misses interactions of exactly that kind.
+
+A **self-reported** passing control does not close a question. Only a
+control the auditor measured does — which is the whole reason an adversary
+exists.
+
+### When more data cannot help
+
+The most expensive experiment is one that cannot answer its question at
+any sample size. `active_design.py` computes the Fisher information
+`F = JᵀΣ⁻¹J`; a near-zero eigenvalue names a direction the experiment is
+blind to, and blindness is not cured by repetition.
+
+On the H4-shaped case — a design sensitive only to `p_ZZ − p_GPi2` — it
+reports the blind direction and then ranks candidates by information along
+it per dollar:
+
+```
+   1.939  zz_only_calibration       adds 50 along the weak direction at $25.79
+ 0.07326  full_sweep                adds 500 at $6,825.00
+       0  more_shots_same_circuit   adds 0 along the weak direction for free
+```
+
+Free is not the same as useful.
+
+### How much evidence is enough
+
+`UNDER_POWERED` as a label tells a researcher nothing. `power.py` returns
+power, `required_n`, `minimum_additional` and expected cost — and refuses
+to size a sample when **σ does not match the claim's uncertainty scope**.
+That refusal is the project's most expensive historical mistake restated
+statistically: the 8-seed bootstrap bars had a within-submission σ near
+0.0015 kcal/mol while independent submissions of the identical circuit set
+differed by 3.27.
+
+It also sizes against the 95% *upper bound* on σ rather than the point
+estimate, because a sample sd from 4 draws is not σ — it is a noisy guess
+at σ, inflated ~3.0x at n=4 and ~1.8x at n=8.
+
+A finding worth recording: powering against the scale the draws actually
+differ on returns `required_n = 8`, independently rederiving the project's
+own 8-draw convention from the statistics rather than from habit.
+
+### Blind mode
+
+An auditor evaluated on records whose expected verdict sits in the same
+file is being graded on a task it can see the answer to — the target-leakage
+failure its own benchmarks encode. A `BlindChallenge` withholds every
+outcome quantity while keeping the methodology visible, and `reveal()`
+refuses until a decision is committed.
+
+All six benchmarks are answered correctly blind, the flagship ancilla-QED
+case included: the auditor withholds certification and names the missing
+evidence without ever seeing 0.0144 or the Q95.
+
+### Provenance
+
+Content-addressed evidence bundles, so "can you reproduce 0.018?" is
+answerable. A digest names an exact combination of circuit, counts,
+calibration, seeds, backend, environment and analysis version; `diff` says
+*which* input moved, which a bare mismatch cannot. `is_reproducible` flags
+an unset `PYTHONHASHSEED` and a dirty working tree — both make a recorded
+commit fail to identify the code that ran.
+
+Stated plainly: these are content hashes, not signatures. They detect
+change; they do not authenticate.
 
 ## Install
 
@@ -90,6 +204,8 @@ No Python required for the basic path:
 qem-auditor template > my_experiment.json   # a blank record to fill in
 qem-auditor validate my_experiment.json     # is it readable and self-consistent?
 qem-auditor audit my_experiment.json        # the verdict, why, and what to run next
+qem-auditor attack my_experiment.json       # what would falsify this claim?
+qem-auditor blind my_experiment.json        # audit with the outcome hidden, then reveal
 qem-auditor audit my_experiment.json --json # machine-readable, for CI
 ```
 
@@ -160,6 +276,7 @@ Run it:
 python run_benchmarks.py                    # the 6 real cases; non-zero exit on a wrong verdict
 python run_audit_loop.py                    # the closed loop, replayed on real history
 python examples/verify_zne_claim.py         # end-to-end verification (needs qiskit)
+python examples/adversarial_loop.py         # propose, execute, judge (needs qiskit)
 python -m unittest discover -s tests -t .   # full suite
 ```
 
@@ -257,15 +374,19 @@ shot noise was 0.0037 against the method's own Monte Carlo at 2.11.
   models, and seed perturbations itself, rather than checking that a
   human ran them. The gates already encode what must be survived; what
   is missing is a proposer.
-- **More measured controls**: adversarial controls are the biggest prize
-  left — the gates already encode what a negative control must do
-  (fail loudly), so what is missing is a generator that produces the
-  shuffled labels, wrong-parity postselections and sign flips itself
-  rather than checking that a human ran them.
-- **Noisy-backend adapters**: the Qiskit adapter currently uses exact
-  statevectors plus sampled shot noise, which is what the ideal control
-  needs. Running claims against Aer noise models, IBM, or Quantinuum is
-  the same interface with a different expectation oracle.
+- **More executable attacks**: six of the nine transformations still need
+  a domain hook (the claimant's own fitting code). `T_label`, `T_sign` and
+  `T_shot` are the tractable next three — they need a fit-and-reconstruct
+  interface the schema does not yet define.
+- **Noisy-backend adapters**: the Qiskit adapter uses exact statevectors
+  plus sampled shot noise, which is what the ideal control needs. Running
+  claims against Aer noise models, IBM, or Quantinuum is the same
+  interface with a different expectation oracle.
+- **Likelihoods from a simulator**: hypothesis likelihoods are currently
+  supplied per observation. Generating `P(D|H_i)` from a predictive model
+  would make the Bayesian layer much stronger, and would let the proposer
+  check that a new hypothesis has measurable consequences before it
+  becomes an experiment candidate.
 - **Learned priors**: with enough records across molecules, backends and
   methods, `P(mitigation succeeds | circuit features)` becomes
   estimable — useful for pricing an experiment before running it. This

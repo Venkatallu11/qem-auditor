@@ -113,6 +113,59 @@ def _cmd_validate(args) -> int:
     return EXIT_OK
 
 
+def _cmd_attack(args) -> int:
+    """What would falsify this claim, and what has it not been subjected to?"""
+    try:
+        exp = record.load(args.path)
+    except RecordError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+    plan = Auditor().attack(exp)
+    if args.json:
+        print(json.dumps({
+            "experiment_id": exp.experiment_id,
+            "attacks": [{
+                "id": a.attack_id,
+                "transformation": a.transformation,
+                "targets": a.targets.name,
+                "description": a.description,
+                "measures": a.prediction.statistic,
+                "if_genuine": a.prediction.if_genuine,
+                "if_artifact": a.prediction.if_artifact,
+                "discrimination": a.discrimination,
+                "executable": a.executable,
+                "cost_usd": a.cost_usd,
+            } for a in plan.attacks],
+            "skipped": [{"transformation": n, "why": w} for n, w in plan.skipped],
+        }, indent=2))
+    else:
+        plan.print_plan()
+    # Untested attack surface is not a pass.
+    return EXIT_OK if not plan.attacks else EXIT_NOT_CERTIFIED
+
+
+def _cmd_blind(args) -> int:
+    """Audit without seeing the outcome, then reveal and score."""
+    try:
+        exp = record.load(args.path)
+    except RecordError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+    from .blind import BlindChallenge, auto_decide
+
+    challenge = BlindChallenge(exp)
+    decision = auto_decide(challenge.blinded)
+    challenge.decide(decision)
+    print(f"blind decision: {decision.reasoning}")
+    print("evidence it says is still required:")
+    for item in decision.required_evidence:
+        print(f"  - {item}")
+    result = challenge.reveal()
+    print()
+    print(result.describe())
+    return EXIT_OK if result.correct else EXIT_NOT_CERTIFIED
+
+
 def _cmd_template(args) -> int:
     print(record.dumps(_template()))
     return EXIT_OK
@@ -134,6 +187,17 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", help="check a record is readable and self-consistent, without auditing")
     p_validate.add_argument("path")
     p_validate.set_defaults(func=_cmd_validate)
+
+    p_attack = sub.add_parser(
+        "attack", help="propose falsification experiments for a claim")
+    p_attack.add_argument("path")
+    p_attack.add_argument("--json", action="store_true")
+    p_attack.set_defaults(func=_cmd_attack)
+
+    p_blind = sub.add_parser(
+        "blind", help="audit the record with its outcome hidden, then reveal")
+    p_blind.add_argument("path")
+    p_blind.set_defaults(func=_cmd_blind)
 
     p_template = sub.add_parser("template", help="print a blank record to fill in")
     p_template.set_defaults(func=_cmd_template)
