@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from statistics import mean, pstdev
 
+from .power import interval_at_n, mean_interval
 from .schema import Experiment, FailureMode
 from .verdict import AuditReport
 
@@ -240,6 +241,33 @@ def classify(exp: Experiment, report: AuditReport,
             f"counts and therefore measure shot noise rather than reproducibility",
             "execute the experiment again, independently -- this is usually cheap on a "
             "free simulator and is the single highest-value missing evidence"))
+
+    # Quantify the replication shortfall rather than merely naming it.
+    # "UNDER_POWERED" tells a researcher nothing they can act on; "power
+    # 0.55, required_n 8, run 4 more" does.
+    repro = by_name.get("reproducibility")
+    if repro is not None and repro.passed is True:
+        n_have = len(out.independent_replicates)
+        target = out.n_replicates_target
+        if n_have < target:
+            reps = [r.error_kcal for r in out.independent_replicates]
+            try:
+                now = mean_interval(reps)
+                projected = interval_at_n(reps, target)
+            except Exception:
+                now = projected = None
+            if now is not None and projected is not None:
+                tighten = now.half_width_kcal / projected.half_width_kcal
+                found.append(Diagnosis(
+                    FailureMode.UNDER_POWERED, 0.7,
+                    f"{n_have}/{target} independent draws: the mean is pinned to "
+                    f"{now.describe()}. Completing the target would tighten that to "
+                    f"+-{projected.half_width_kcal:.4g} ({tighten:.1f}x), partly from "
+                    f"1/sqrt(n) and partly because sigma itself is barely known at "
+                    f"n={n_have}",
+                    f"run {target - n_have} more independent draw(s). Note this is about "
+                    f"how tightly the mean is pinned, not about clearing the headline "
+                    f"threshold -- that is already established at n={n_have}"))
 
     if gate_failed("chemical_accuracy") or gate_failed("improvement"):
         if not found:
