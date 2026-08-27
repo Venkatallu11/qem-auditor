@@ -54,11 +54,12 @@ a joint-frame optimizer with catastrophic local minima, and — eventually
 those failures were caught by hand, one at a time, over weeks. This
 project turns that manual discipline into reusable, automated gates.
 
-## Status: v0.2 — the adversarial experiment engine
+## Status: v0.3 — the autonomous auditor
 
-The jump in v0.2 is from **auditing experiments supplied to it** to
-**generating and executing the cheapest experiment capable of falsifying
-the claim**.
+v0.2 went from **auditing experiments supplied to it** to **generating and
+executing the cheapest experiment capable of falsifying the claim**. v0.3
+lets it do that **on its own**, optionally with a language model widening
+the search — while keeping the model strictly a proposer.
 
 ```
 qem_auditor/
@@ -77,6 +78,10 @@ qem_auditor/
   active_design.py  when more data cannot help, and what to run instead  (v0.2)
   provenance.py     content-addressed evidence bundles  (v0.2)
   blind.py          audit without seeing the answer  (v0.2)
+  llm.py            provider-agnostic model access (v0.3)
+  llm_scientist.py  model proposals, validated by the same code (v0.3)
+  agent.py          the loop, running by itself (v0.3)
+  report.py         console and self-contained HTML reports (v0.3)
   api.py            the Auditor facade
   cli.py            python -m qem_auditor
   adapters/         execute controls instead of trusting them (optional, needs qiskit)
@@ -104,6 +109,64 @@ letting it grade itself:
 The proposer commits to what each outcome means **before** anything runs,
 so it cannot reinterpret a bad result afterwards. `AdversarialScientist`
 has no API for issuing a verdict, and a test keeps it that way.
+
+### Running it autonomously
+
+```bash
+qem-auditor investigate my_experiment.json --qiskit --html report.html
+```
+
+It audits, works out what could still be wrong, proposes attacks, executes
+the ones it can, folds the results back in, and decides whether to
+continue — stopping when nothing informative remains to buy, and saying
+why.
+
+On a real ZNE claim submitted at `optimization_level=3`, unaided:
+
+```
+round 1: NOT ESTABLISHED | 10 attacks | 2 falsified, 2 survived, 0 not run
+    FALSIFIED by T_compiler
+    FALSIFIED by T_compiler+T_extrapolation
+round 2: INVALID
+stopped: INVALID: the claim is disqualified, and no further attack changes that
+```
+
+The agent decides only **whether to keep going**. Every verdict comes from
+the gates, it has no method containing the word "certify", and a test
+asserts an agent run cannot upgrade an unproven claim.
+
+### Adding a language model (optional, and free)
+
+The auditor needs no model. One only widens the set of attacks
+considered — a local model is plenty:
+
+```bash
+ollama serve && ollama pull llama3.1
+export QEM_LLM_PROVIDER=openai
+export QEM_LLM_BASE_URL=http://localhost:11434/v1
+export QEM_LLM_MODEL=llama3.1
+```
+
+Anything speaking `/v1/chat/completions` works (Ollama, LM Studio,
+llama.cpp, vLLM, Groq, OpenRouter, Together), as does the Anthropic
+Messages API. With nothing configured, the deterministic grammar runs and
+reaches the same verdicts.
+
+**The model is a proposer and structurally cannot be anything else.**
+Every proposal meets the same validation a hand-written one does:
+
+| the model proposes | what happens |
+|---|---|
+| an attack with different genuine/artifact outcomes | accepted, at a lower discrimination than a hand-written one |
+| an attack predicting the same thing either way | **rejected** — it will confirm whatever you already believe |
+| an attack missing its statistic | **rejected**, naming the gaps |
+| `"verdict": "PASS"`, `"ideal_control": true` | those fields **stripped**; the legitimate part kept |
+| a hypothesis with no observable consequence | **rejected** — no experiment could ever address it |
+
+Rejections are reported, never silently dropped. A model that proposes
+six attacks of which two are non-diagnostic has told you something useful
+about itself, and hiding that would make the auditor's own behaviour
+unauditable.
 
 ### The failure grammar
 
@@ -206,6 +269,8 @@ qem-auditor validate my_experiment.json     # is it readable and self-consistent
 qem-auditor audit my_experiment.json        # the verdict, why, and what to run next
 qem-auditor attack my_experiment.json       # what would falsify this claim?
 qem-auditor blind my_experiment.json        # audit with the outcome hidden, then reveal
+qem-auditor investigate my_experiment.json  # run the loop autonomously
+qem-auditor audit my_experiment.json --html report.html   # a shareable report
 qem-auditor audit my_experiment.json --json # machine-readable, for CI
 ```
 
@@ -277,6 +342,7 @@ python run_benchmarks.py                    # the 6 real cases; non-zero exit on
 python run_audit_loop.py                    # the closed loop, replayed on real history
 python examples/verify_zne_claim.py         # end-to-end verification (needs qiskit)
 python examples/adversarial_loop.py         # propose, execute, judge (needs qiskit)
+python examples/autonomous_audit.py         # the agent, unattended (needs qiskit)
 python -m unittest discover -s tests -t .   # full suite
 ```
 
