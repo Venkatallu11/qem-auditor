@@ -6,3 +6,6 @@ venv/
 .env
 .pytest_cache/
 .DS_Store
+build/
+dist/
+*.egg-info/

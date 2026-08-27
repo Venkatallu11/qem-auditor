@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qem-auditor"
+version = "0.1.0"
+description = "An auditor for quantum error-mitigation claims: gates, verdicts, failure diagnosis, and experiment planning."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["quantum", "error-mitigation", "verification", "reproducibility", "qiskit"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# The core has NO runtime dependencies, deliberately: the thing deciding
+# whether a scientific claim passed should be readable and runnable by
+# anyone, with no version skew available to explain a verdict away.
+dependencies = []
+
+[project.optional-dependencies]
+# Needed only to EXECUTE controls rather than grade a record as written.
+adapters = ["qiskit>=1.0"]
+
+[project.scripts]
+qem-auditor = "qem_auditor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Venkatallu11/qem-auditor"
+
+[tool.setuptools]
+packages = ["qem_auditor", "qem_auditor.adapters"]

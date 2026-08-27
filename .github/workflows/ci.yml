@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    # The core must pass with nothing installed. If this job ever needs a
+    # dependency, the core has grown one by accident.
+    name: core (no dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Installed, not just importable from the repo root -- so packaging
+      # breakage fails here rather than for whoever clones it.
+      - run: pip install -e .
+      - run: python -m unittest discover -s tests -t . -v
+      - run: python run_benchmarks.py
+      - run: python run_audit_loop.py
+      - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
+
+  adapters:
+    name: adapters (qiskit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[adapters]"
+      - run: python -m unittest discover -s tests -t . -v
+      - run: python examples/verify_zne_claim.py

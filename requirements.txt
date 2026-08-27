@@ -1,2 +1,9 @@
-# Phase 1 has zero external dependencies -- stdlib only (dataclasses,
-# statistics, enum). Kept intentionally empty until a real need appears.
+# The auditor core has ZERO external dependencies -- stdlib only. That is
+# deliberate: the thing deciding whether a scientific claim passed should
+# be readable and runnable by anyone, with nothing to install and no
+# version skew to explain a verdict away.
+#
+# Backend adapters, which execute controls against real circuits, need
+# their SDK. Those are optional:
+#
+#     pip install -r requirements-adapters.txt
