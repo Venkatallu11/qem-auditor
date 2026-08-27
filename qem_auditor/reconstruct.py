@@ -106,8 +106,75 @@ class Reconstructor(Protocol):
 
 
 # --------------------------------------------------------------------------
+# Optional capabilities
+# --------------------------------------------------------------------------
+#
+# A pipeline implementing only fit/reconstruct/goodness_of_fit gets
+# T_label, T_sign and T_shot. These three add the rest. Each is optional
+# and checked for at runtime, so nobody has to implement machinery for an
+# attack that does not apply to their method.
+
+
+@runtime_checkable
+class Parameterised(Protocol):
+    """Exposes free parameters, so T_leakage can drive them to their limits."""
+
+    def free_parameters(self) -> dict[str, tuple[float, float]]:
+        """name -> (floor, nominal). The floor is the limit the parameter
+        approaches; nominal is where the method actually runs."""
+
+    def evaluate_at(self, name: str, value: float, data: FitData) -> float:
+        """The reconstruction with one parameter pinned to `value`."""
+
+
+@runtime_checkable
+class NoiseModelled(Protocol):
+    """Exposes the assumed noise parameters, so T_calibration can vary them."""
+
+    def noise_parameters(self) -> dict[str, tuple[float, float]]:
+        """name -> (low, high), the interval real measurements justify."""
+
+    def evaluate_under_noise(self, params: dict[str, float],
+                             data: FitData) -> float:
+        """The reconstruction under a given draw of the noise parameters."""
+
+
+@runtime_checkable
+class StructurallyConstrained(Protocol):
+    """Exposes the same fit WITHOUT its structural assumption, so
+    T_correlation can ask whether the constraint is buying variance
+    reduction or buying existence."""
+
+    def fit_without_structure(self, data: FitData) -> Any:
+        ...
+
+    def reconstruct_without_structure(self, fit: Any, data: FitData) -> float:
+        ...
+
+
+# --------------------------------------------------------------------------
 # The perturbations
 # --------------------------------------------------------------------------
+
+
+def scramble(data: FitData, seed: int = 0) -> FitData:
+    """Replace every value with a random draw from the observed range.
+
+    Garbage in. The point is not subtlety -- it is to ask whether the
+    pipeline's output depends on the measurements AT ALL. A method that
+    returns the same answer from real and scrambled data is not measuring
+    anything, and that is detectable without knowing the true answer,
+    which is what makes it usable as a control.
+    """
+    values = [m.value for m in data.measurements]
+    low, high = min(values), max(values)
+    if high <= low:
+        high = low + 1.0
+    rng = random.Random(seed)
+    out = data.copy()
+    for m in out.measurements:
+        m.value = rng.uniform(low, high)
+    return out
 
 def shuffle_is_diagnostic(data: FitData) -> tuple[bool, str]:
     """Can a label shuffle discriminate on THIS data at all?
@@ -275,6 +342,113 @@ def compare_fit(reconstructor: Reconstructor, data: FitData,
         ratio = bad_gof / real_gof
     return FitComparison(real_gof, bad_gof, ratio,
                          f"chi2/dof {real_gof:.6g} -> {bad_gof:.6g} ({ratio:.1f}x)")
+
+
+@dataclass
+class DegeneracyScan:
+    """How a method's dependence on its own data changes as a free
+    parameter approaches its limit."""
+
+    parameter: str
+    values: list[float] = field(default_factory=list)
+    divergence: list[float] = field(default_factory=list)
+    """|reconstruct(real) - reconstruct(scrambled)| at each parameter value.
+    A method that measures something keeps this large; one that has
+    degenerated into re-deriving a known answer drives it to zero."""
+
+    @property
+    def degenerates(self) -> bool:
+        """Does dependence on the data collapse toward the floor?"""
+        if len(self.divergence) < 2:
+            return False
+        at_floor, at_nominal = self.divergence[0], self.divergence[-1]
+        if at_nominal <= 0:
+            return False
+        return at_floor < 0.1 * at_nominal
+
+    def describe(self) -> str:
+        if not self.divergence:
+            return f"{self.parameter}: no usable evaluations"
+        return (f"{self.parameter}: dependence on the data goes "
+                f"{self.divergence[-1]:.4g} (nominal) -> {self.divergence[0]:.4g} "
+                f"(floor)")
+
+
+def degeneracy_scan(pipeline: Parameterised, data: FitData, parameter: str,
+                    floor: float, nominal: float, steps: int = 5,
+                    seed: int = 0) -> DegeneracyScan:
+    """Drive one free parameter toward its floor and watch whether the
+    method stops depending on its measurements.
+
+    The historical case this catches: locally-perturbed CDR, whose
+    training-perturbation radius had no floor -- as the radius shrinks the
+    training circuit converges on the TARGET circuit, so the method
+    degenerates into classically re-evaluating the answer it claims to be
+    measuring.
+
+    The obvious test ("does the estimate converge on the exact answer?")
+    is unusable, because an auditor with the exact answer does not need an
+    auditor. The usable one is whether the estimate stops responding to
+    the DATA: feed real and scrambled measurements at each parameter
+    value, and watch the gap between them.
+    """
+    scan = DegeneracyScan(parameter)
+    scrambled = scramble(data, seed)
+    # Floor first, so index 0 is the limit and -1 is where it actually runs.
+    for i in range(steps):
+        t = i / max(1, steps - 1)
+        value = floor + t * (nominal - floor)
+        try:
+            real = float(pipeline.evaluate_at(parameter, value, data))
+            fake = float(pipeline.evaluate_at(parameter, value, scrambled))
+        except Exception:
+            continue
+        scan.values.append(value)
+        scan.divergence.append(abs(real - fake))
+    return scan
+
+
+def noise_envelope(pipeline: NoiseModelled, data: FitData, draws: int = 32,
+                   seed: int = 0) -> tuple[float, float, list[float]]:
+    """Re-evaluate under randomized noise parameters.
+
+    Returns (nominal, q95_deviation, samples). The nominal is the midpoint
+    draw; the deviation is measured against it rather than against a true
+    answer the auditor does not have.
+
+    On `draws`: a Q95 from 32 samples is the second-largest deviation, so
+    it estimates the tail coarsely -- it will under-report a rare blowup
+    that a wider sweep would find. 32 is a cost/precision compromise for a
+    check meant to run often, not a claim about the tail's true shape.
+    Raise it (the H4 robustness envelopes used 29-97 expensive draws) when
+    the answer matters, and read a near-threshold ratio as "run more
+    draws" rather than as a pass.
+    """
+    rng = random.Random(seed)
+    intervals = pipeline.noise_parameters()
+    if not intervals:
+        raise ReconstructionError("no noise parameters exposed to vary")
+    midpoint = {name: (low + high) / 2 for name, (low, high) in intervals.items()}
+    try:
+        nominal = float(pipeline.evaluate_under_noise(midpoint, data))
+    except Exception as e:
+        raise ReconstructionError(f"the pipeline failed at nominal calibration: {e}") from e
+
+    samples = []
+    for _ in range(draws):
+        params = {name: rng.uniform(low, high)
+                  for name, (low, high) in intervals.items()}
+        try:
+            samples.append(float(pipeline.evaluate_under_noise(params, data)))
+        except Exception:
+            continue
+    if len(samples) < 2:
+        raise ReconstructionError(
+            f"only {len(samples)} of {draws} noise draws evaluated; the envelope "
+            f"cannot be estimated")
+    deviations = sorted(abs(v - nominal) for v in samples)
+    index = min(len(deviations) - 1, int(0.95 * len(deviations)))
+    return nominal, deviations[index], samples
 
 
 def reconstruction_spread(reconstructor: Reconstructor, data: FitData,

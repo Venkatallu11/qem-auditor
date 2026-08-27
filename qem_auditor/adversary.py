@@ -207,7 +207,8 @@ def t_calibration_shift(exp: Experiment) -> Attack:
         "The 0.115 kcal/mol headline was real under one fixed model and disowned "
         "at Q95=51.22 once the model's own parameters varied. Per-TYPE rather than "
         "per-instance matters: per-instance produced Q95=827 and was a modelling "
-        "bug, not a finding.")
+        "bug, not a finding.",
+        executable=True, discrimination=0.88)
 
 
 def t_compiler_optimize(exp: Experiment) -> Attack:
@@ -265,16 +266,19 @@ def t_target_leakage(exp: Experiment) -> Attack:
     return _attack(
         "T_leakage", "T_leakage", FailureMode.FREE_PARAMETER_DEGENERACY,
         "Drive each free parameter toward its limit and check whether the method "
-        "converges on re-evaluating the known answer.",
-        "the method's estimate as the parameter approaches its floor",
-        "the estimate degrades or the method refuses -- the parameter has a real "
-        "floor and the method depends on measurement",
-        "the estimate converges on the exact answer -- the method is classically "
-        "re-deriving what it claims to be measuring",
+        "stops depending on the measurements.",
+        "the gap between reconstructions from real and from scrambled data, as the "
+        "parameter approaches its floor",
+        "the gap holds up -- the method keeps depending on what was measured, so "
+        "the parameter has a real floor",
+        "the gap collapses toward zero -- the method returns the same answer from "
+        "real and garbage data, so it is deriving rather than measuring",
         "Locally-perturbed CDR was disqualified exactly here: as the training "
         "perturbation radius shrinks, the training circuit converges on the target "
-        "circuit itself. Any simulator-only testbed can cheat this way, because "
-        "'exact' is one Statevector call away.")
+        "circuit itself. Note the statistic is dependence on the DATA, not distance "
+        "to the true answer -- an auditor holding the true answer would not need to "
+        "be an auditor, so the test has to work without it.",
+        executable=True, discrimination=0.9)
 
 
 def t_correlation_break(exp: Experiment) -> Attack:
@@ -289,7 +293,8 @@ def t_correlation_break(exp: Experiment) -> Attack:
         "of the assumption, and more samples will never fix it",
         "A shared-frame constraint on noisy data is a regularizer, not a free "
         "improvement, and there is no physical law forcing the assumed structure to "
-        "hold. Worth separating 'this helps' from 'without this there is no answer'.")
+        "hold. Worth separating 'this helps' from 'without this there is no answer'.",
+        executable=True, discrimination=0.85)
 
 
 GRAMMAR: dict[str, Transformation] = {
@@ -436,10 +441,32 @@ class AdversarialScientist:
         # that needs a domain hook and a budget.
         plan.attacks.sort(key=lambda a: (not a.executable, a.cost_usd))
 
-        if include_composed and len(plan.attacks) >= 2:
-            interacting = [a.transformation for a in plan.attacks
-                           if a.transformation in ("T_calibration", "T_extrapolation",
-                                                   "T_compiler")]
-            if len(interacting) >= 2:
-                plan.attacks.append(compose(exp, *interacting[:2]))
+        if include_composed:
+            composed = self._compose_interacting(exp, plan)
+            if composed is not None:
+                plan.attacks.append(composed)
         return plan
+
+    # Attacks that need the same kind of artifact, so a composition of two
+    # of them is runnable whenever either is. Composing across the classes
+    # produces an attack needing BOTH a backend and the claimant's fitting
+    # code, which is strictly harder to run than either part and therefore
+    # usually runs as neither.
+    _BACKEND_CLASS = ("T_compiler", "T_extrapolation", "T_seed")
+    _PIPELINE_CLASS = ("T_calibration", "T_correlation", "T_leakage",
+                       "T_label", "T_sign", "T_shot")
+
+    def _compose_interacting(self, exp: Experiment, plan: AttackPlan):
+        """Compose two attacks from the same execution class.
+
+        Real failures arrive together -- the H4 robustness envelope was
+        calibration composed with a coherent-error transformation, and it
+        behaved nothing like either alone. But a composition nobody can
+        run is not worth proposing, so the pair is drawn from one class.
+        """
+        available = [a.transformation for a in plan.attacks if "+" not in a.attack_id]
+        for group in (self._BACKEND_CLASS, self._PIPELINE_CLASS):
+            pair = [t for t in group if t in available][:2]
+            if len(pair) == 2:
+                return compose(exp, *pair)
+        return None

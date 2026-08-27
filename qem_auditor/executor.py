@@ -19,8 +19,13 @@ from typing import Any, Callable, Optional
 from .adversary import Attack, AttackPlan
 from .adapters.base import ControlMeasurement, MeasurementError
 from .reconstruct import (
+    NoiseModelled,
+    Parameterised,
     ReconstructionError,
+    StructurallyConstrained,
     compare_fit,
+    degeneracy_scan,
+    noise_envelope,
     shuffle_is_diagnostic,
     flip_sign,
     reconstruction_spread,
@@ -336,7 +341,154 @@ def _run_shot(ex: "AttackExecutor", exp: Experiment, attack: Attack,
 # own fitting code.
 _NEEDS_ADAPTER = frozenset({"T_compiler", "T_extrapolation", "T_seed"})
 
+
+def _run_leakage(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+                 artifacts: dict) -> AttackOutcome:
+    """Does the method stop depending on its data as a free parameter
+    approaches its floor?"""
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    if not isinstance(reconstructor, Parameterised):
+        return AttackOutcome(
+            attack, False,
+            detail=("the pipeline exposes no free parameters -- implement "
+                    "free_parameters() and evaluate_at() to make this runnable. A "
+                    "method with genuinely no free parameters cannot fail this way, "
+                    "which is worth stating rather than leaving implied"))
+    try:
+        parameters = reconstructor.free_parameters()
+    except Exception as e:
+        return AttackOutcome(attack, False, detail=f"free_parameters() raised: {e}")
+    if not parameters:
+        return AttackOutcome(attack, False,
+                             detail="no free parameters declared, so none can degenerate")
+
+    degenerate, described = [], []
+    for name, bounds in parameters.items():
+        try:
+            floor, nominal = float(bounds[0]), float(bounds[1])
+        except (TypeError, ValueError, IndexError):
+            described.append(f"{name}: bounds not readable as (floor, nominal)")
+            continue
+        scan = degeneracy_scan(reconstructor, data, name, floor, nominal,
+                               steps=int(artifacts.get("leakage_steps", 5)),
+                               seed=int(artifacts.get("seed", 0)))
+        described.append(scan.describe())
+        if scan.degenerates:
+            degenerate.append(name)
+
+    if not any(s for s in described):
+        return AttackOutcome(attack, False, detail="no parameter could be scanned")
+    if degenerate:
+        return AttackOutcome(
+            attack, True, matched="artifact",
+            detail=(f"{', '.join(degenerate)} degenerate: near the floor the method "
+                    f"returns the same answer from real and scrambled data, so it is "
+                    f"deriving rather than measuring. " + "; ".join(described)))
+    return AttackOutcome(
+        attack, True, matched="genuine",
+        detail=("every free parameter keeps the method dependent on its "
+                "measurements at the floor. " + "; ".join(described)))
+
+
+def _run_calibration(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+                     artifacts: dict) -> AttackOutcome:
+    """Re-evaluate under randomized noise parameters and look at the tail."""
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    if not isinstance(reconstructor, NoiseModelled):
+        return AttackOutcome(
+            attack, False,
+            detail=("the pipeline exposes no noise model -- implement "
+                    "noise_parameters() and evaluate_under_noise() over the "
+                    "intervals your own measurements justify"))
+    try:
+        nominal, q95, samples = noise_envelope(
+            reconstructor, data,
+            draws=int(artifacts.get("calibration_draws", 32)),
+            seed=int(artifacts.get("seed", 0)))
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=str(e))
+
+    # Relative to the nominal result, because the auditor has no absolute
+    # target to measure against and should not pretend to one.
+    tolerance = float(artifacts.get("calibration_max_ratio", 1.0))
+    scale = abs(nominal) if abs(nominal) > 1e-12 else 1.0
+    ratio = q95 / scale
+    if ratio > tolerance:
+        return AttackOutcome(
+            attack, True, matched="artifact",
+            detail=(f"Q95 deviation {q95:.4g} across {len(samples)} randomized noise "
+                    f"models, {ratio:.1f}x the nominal result {nominal:.4g} -- the "
+                    f"result depends on which noise model was assumed, so it was an "
+                    f"artifact of one lucky calibration"))
+    return AttackOutcome(
+        attack, True, matched="genuine",
+        detail=(f"Q95 deviation {q95:.4g} across {len(samples)} randomized noise "
+                f"models, {ratio:.2f}x the nominal {nominal:.4g} -- the method "
+                f"tolerates the calibration uncertainty that actually exists"))
+
+
+def _run_correlation(ex: "AttackExecutor", exp: Experiment, attack: Attack,
+                     artifacts: dict) -> AttackOutcome:
+    """Is the structural assumption buying variance reduction, or existence?"""
+    reconstructor, data, why = _reconstruction_artifacts(artifacts)
+    if reconstructor is None:
+        return AttackOutcome(attack, False, detail=why)
+    if not isinstance(reconstructor, StructurallyConstrained):
+        return AttackOutcome(
+            attack, False,
+            detail=("the pipeline exposes no unconstrained variant -- implement "
+                    "fit_without_structure() and reconstruct_without_structure() to "
+                    "make the assumption droppable"))
+    trials = int(artifacts.get("correlation_trials", 8))
+
+    class _Unconstrained:
+        def fit(self, d):
+            return reconstructor.fit_without_structure(d)
+
+        def reconstruct(self, fit, d):
+            return reconstructor.reconstruct_without_structure(fit, d)
+
+        def goodness_of_fit(self, fit, d):
+            return 0.0
+
+    try:
+        _, constrained = reconstruction_spread(
+            reconstructor, data, lambda d, t: resample_shots(d, seed=t), trials=trials)
+        _, unconstrained = reconstruction_spread(
+            _Unconstrained(), data, lambda d, t: resample_shots(d, seed=t),
+            trials=trials)
+    except ReconstructionError as e:
+        return AttackOutcome(attack, False, detail=str(e))
+
+    if constrained <= 1e-12:
+        return AttackOutcome(
+            attack, False,
+            detail=("the constrained reconstruction does not respond to resampling at "
+                    "all, so the two cannot be compared"))
+    ratio = unconstrained / constrained
+    blowup = float(artifacts.get("correlation_max_ratio", 20.0))
+    if ratio > blowup:
+        return AttackOutcome(
+            attack, True, matched="artifact",
+            detail=(f"without the structural assumption the reconstruction spread goes "
+                    f"{constrained:.4g} -> {unconstrained:.4g} ({ratio:.0f}x) -- the "
+                    f"parameters are effectively unidentifiable without it, so the "
+                    f"constraint is buying existence rather than variance reduction, "
+                    f"and more samples will not fix that"))
+    return AttackOutcome(
+        attack, True, matched="genuine",
+        detail=(f"spread {constrained:.4g} constrained vs {unconstrained:.4g} "
+                f"unconstrained ({ratio:.1f}x) -- the parameters remain identifiable "
+                f"without the assumption, so it is buying variance reduction"))
+
 _RUNNERS = {
+    "T_calibration": _run_calibration,
+    "T_correlation": _run_correlation,
+    "T_leakage": _run_leakage,
     "T_label": _run_label,
     "T_sign": _run_sign,
     "T_shot": _run_shot,
