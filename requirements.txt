@@ -1,0 +1,2 @@
+# Phase 1 has zero external dependencies -- stdlib only (dataclasses,
+# statistics, enum). Kept intentionally empty until a real need appears.
