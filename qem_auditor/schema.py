@@ -33,6 +33,7 @@ gets wrong:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -157,9 +158,18 @@ class FailureMode(Enum):
 
 @dataclass
 class Replicate:
-    """One repetition of an experiment, tagged with how independent it is."""
+    """One repetition of an experiment, tagged with how independent it is.
 
-    error_kcal: float
+    `error_kcal` may be None: a replicate that was executed but whose
+    value is withheld (a blinded challenge) or not yet transcribed is
+    still a replicate, and the count and kind are real evidence about
+    method even when the number is unavailable. Gates that need values
+    report "not enough to judge" rather than treating a withheld value as
+    zero -- which is the whole reason this is None and not a sentinel
+    number.
+    """
+
+    error_kcal: Optional[float] = None
     kind: ReplicateKind = ReplicateKind.INDEPENDENT_SUBMISSION
     source_id: str = ""
 
@@ -272,11 +282,18 @@ class Outputs:
 
     @property
     def replicate_errors_kcal(self) -> list[float]:
-        return [r.error_kcal for r in self.replicates]
+        """Only the replicates that actually carry a value."""
+        return [r.error_kcal for r in self.replicates
+                if r.error_kcal is not None and math.isfinite(r.error_kcal)]
 
     @property
     def independent_replicates(self) -> list[Replicate]:
         return [r for r in self.replicates if r.kind.is_independent]
+
+    @property
+    def independent_errors_kcal(self) -> list[float]:
+        return [r.error_kcal for r in self.independent_replicates
+                if r.error_kcal is not None and math.isfinite(r.error_kcal)]
 
     @property
     def outlier_fraction(self) -> Optional[float]:

@@ -294,7 +294,7 @@ def analyze_experiment(exp: Experiment, threshold_kcal: float = 0.25,
     the point estimate is not sigma. Pass False only when sigma is known
     from a large sample or from theory.
     """
-    reps = [r.error_kcal for r in exp.outputs.independent_replicates]
+    reps = exp.outputs.independent_errors_kcal
     if len(reps) < 2:
         return None
     observed = mean(reps)

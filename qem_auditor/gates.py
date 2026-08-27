@@ -88,11 +88,16 @@ def reproducibility_gate(exp: Experiment, rel_tolerance: float = 0.5) -> GateRes
     them? Judged on INDEPENDENT replicates only -- see
     replicate_independence_gate for why bootstrap replicates cannot
     substitute."""
-    reps = [r.error_kcal for r in exp.outputs.independent_replicates]
+    reps = exp.outputs.independent_errors_kcal
+    n_independent = len(exp.outputs.independent_replicates)
     n_target = exp.outputs.n_replicates_target
     if not exp.controls.reproducibility_checked or len(reps) < 2:
+        withheld = n_independent - len(reps)
+        note = (f"; {withheld} independent replicate(s) recorded without a value"
+                if withheld else "")
         return GateResult("reproducibility", None,
-                          f"insufficient independent replicates to judge ({len(reps)} collected)")
+                          f"insufficient independent replicate values to judge "
+                          f"({len(reps)} usable){note}")
     m = mean(reps)
     spread = pstdev(reps)
     agree = spread <= rel_tolerance * m if m > 0 else spread == 0.0

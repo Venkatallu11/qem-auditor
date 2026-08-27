@@ -47,9 +47,14 @@ def integrity_violations(exp: Experiment) -> list[str]:
         if r < 0:
             v.append(f"replicate_errors_kcal[{i}]={r} is negative -- these are error magnitudes")
 
-    if ctl.reproducibility_checked and len(out.replicate_errors_kcal) < 2:
+    # Counted structurally, not by value: the assertion is about whether
+    # draws were MADE, and a draw whose value is withheld (a blinded
+    # challenge) or not yet transcribed is still a draw. Counting values
+    # here would make redaction look like a malformed record, which is a
+    # different finding entirely.
+    if ctl.reproducibility_checked and len(out.replicates) < 2:
         v.append(
-            f"reproducibility_checked=True but only {len(out.replicate_errors_kcal)} "
+            f"reproducibility_checked=True but only {len(out.replicates)} "
             "replicate(s) recorded -- reproducibility cannot be asserted without the data"
         )
 

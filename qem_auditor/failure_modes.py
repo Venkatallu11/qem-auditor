@@ -159,7 +159,7 @@ def classify(exp: Experiment, report: AuditReport,
                 "conditioning from implementation"))
 
     if gate_failed("reproducibility"):
-        reps = [r.error_kcal for r in out.independent_replicates]
+        reps = out.independent_errors_kcal
         spread = pstdev(reps) if len(reps) > 1 else 0.0
         m = mean(reps) if reps else 0.0
         # Which mechanism? Drift and Monte Carlo variance look identical
@@ -250,7 +250,7 @@ def classify(exp: Experiment, report: AuditReport,
         n_have = len(out.independent_replicates)
         target = out.n_replicates_target
         if n_have < target:
-            reps = [r.error_kcal for r in out.independent_replicates]
+            reps = out.independent_errors_kcal
             try:
                 now = mean_interval(reps)
                 projected = interval_at_n(reps, target)
