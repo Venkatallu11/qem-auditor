@@ -159,7 +159,8 @@ def t_label_shuffle(exp: Experiment) -> Attack:
         "anything, so its agreement with real data was never evidence",
         "A model that fits shuffled data as well as real data has not learned the "
         "physics; it has learned to fit. This is the cheapest leakage test there is "
-        "and it runs on data already collected.")
+        "and it runs on data already collected.",
+        executable=True, discrimination=0.9)
 
 
 def t_sign_flip(exp: Experiment) -> Attack:
@@ -172,7 +173,8 @@ def t_sign_flip(exp: Experiment) -> Attack:
         "error is unchanged or improves -- the correction was not the thing "
         "producing the result, or a sign convention is inconsistent somewhere",
         "A correction that helps in both directions is not a correction. This also "
-        "catches the bookkeeping class of bug directly.")
+        "catches the bookkeeping class of bug directly.",
+        executable=True, discrimination=0.88)
 
 
 def t_seed_perturb(exp: Experiment) -> Attack:
@@ -255,7 +257,8 @@ def t_shot_reallocate(exp: Experiment) -> Attack:
         "term in the budget while the real lever goes untouched",
         "In the measured H4 variance budget: shot noise 0.0037, method Monte Carlo "
         "2.11. Roughly 570x. 'Run more shots' was the intuitive answer and the "
-        "wrong one, and only decomposition revealed it.")
+        "wrong one, and only decomposition revealed it.",
+        executable=True, discrimination=0.85)
 
 
 def t_target_leakage(exp: Experiment) -> Attack:

@@ -22,6 +22,7 @@ jobs:
       - run: python -m unittest discover -s tests -t . -v
       - run: python run_benchmarks.py
       - run: python run_audit_loop.py
+      - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
       # Every CLI subcommand, so a broken entry point fails here rather
       # than for whoever runs it. `audit` and `attack` exit non-zero by
@@ -58,6 +59,8 @@ jobs:
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
+      # Pure-stdlib: the fit-based attacks need no backend at all.
+      - run: python examples/attack_a_pipeline.py
       - run: python examples/autonomous_audit.py
       # The front door: the starting point we hand people must actually run.
       - run: |
