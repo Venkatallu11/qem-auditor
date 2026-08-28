@@ -16,6 +16,8 @@ except ImportError:  # pragma: no cover
 
 from qem_auditor.adapters.base import MeasurementError
 
+from .helpers import make_experiment
+
 
 def _circuit():
     qc = QuantumCircuit(2)
@@ -176,8 +178,6 @@ class GateTest(unittest.TestCase):
     def test_unrun_is_not_a_pass(self):
         from qem_auditor import gates
 
-        from .helpers import make_experiment
-
         exp = make_experiment(mitigation_benefit=None)
         self.assertIsNone(gates.mitigation_benefit_gate(exp).passed)
 
@@ -185,15 +185,11 @@ class GateTest(unittest.TestCase):
         """Not shown to work is not the same as shown to be broken."""
         from qem_auditor import Verdict, audit
 
-        from .helpers import make_experiment
-
         exp = make_experiment(mitigation_benefit=False)
         self.assertIsNot(audit(exp).verdict, Verdict.INVALID)
 
     def test_but_it_blocks_certification(self):
         from qem_auditor import Verdict, audit
-
-        from .helpers import make_experiment
 
         self.assertIs(audit(make_experiment()).verdict, Verdict.CERTIFIED_UNDER_SCOPE)
         self.assertIsNot(audit(make_experiment(mitigation_benefit=False)).verdict,

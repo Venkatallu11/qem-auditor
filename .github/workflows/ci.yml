@@ -21,6 +21,9 @@ jobs:
       - run: pip install -e .
       - run: python -m unittest discover -s tests -t . -v
       - run: python run_benchmarks.py
+      # Scoring, not pinning: fails if the auditor stops beating a constant
+      # answer on the suite, which no single-verdict test would catch.
+      - run: python run_trust.py
       - run: python run_audit_loop.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
