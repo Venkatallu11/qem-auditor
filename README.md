@@ -220,6 +220,65 @@ Verdict and diagnosis are scored on separate axes. An auditor that stops
 a bad result for the wrong reason still stopped it, and folding the two
 together would let a good diagnosis mask a false endorsement.
 
+### Minimal pairs, and what saturating a suite means
+
+The first thing the scoring layer reported about qem-auditor was `GRADE:
+SUITE SATURATED` — 6/6 on the disclosed cases. That is a statement about
+the suite, not the tool. Six cases had left six gates never once observed
+failing, `mitigation_benefit` never observed running at all,
+`independent_verification` never observed passing, and no case anywhere
+near the top verdict — so an auditor that *could not produce*
+`CERTIFIED UNDER SCOPE` scored the same as one that could.
+
+`benchmarks/constructed.py` adds six **minimal pairs**: twelve records,
+two at a time, identical except in one stated respect that is supposed to
+move the verdict. Credit is all-or-nothing across a pair — half a pair is
+what guessing looks like.
+
+| pair | the one difference | verdicts |
+|---|---|---|
+| failed vs unrun | the ideal control failed, or was never run | `INVALID` / `NOT ESTABLISHED` |
+| bootstrap vs independent | replicates resample one submission, or are eight | `NOT ESTABLISHED` / `CERTIFIED` |
+| self-reported vs measured | who checked the passing controls | `PROMISING` / `CERTIFIED` |
+| benefit vs none | under device noise the mitigation helps, or doesn't | `PROMISING` / `CERTIFIED` |
+| model-only vs full scope | what the identical bars were computed over | `VALID UNDER MODEL` / `CERTIFIED` |
+| absolute vs relative | the same numbers, claimed two ways | `REFUTED` / `CERTIFIED` |
+
+The last one is the sharpest: 4.00 → 1.10 kcal/mol is a real 3.6x
+reduction *and* a clear miss of chemical accuracy. The evidence refutes
+one claim and supports the other. An auditor that grades the number
+instead of the claim must get one of them wrong.
+
+**Do the pairs earn their place?** Measured, not asserted.
+`number_reading_auditor` is a baseline that reads the results table and
+nothing else — roughly how most claims actually get assessed:
+
+| | disclosed 6 | with the pairs |
+|---|---|---|
+| exact | 2/6 | 6/18 |
+| skill | **+0.206** | +0.144 |
+| pairs solved | — | **0/6** |
+| grade | PARTIAL SKILL | **DISQUALIFIED** |
+
+On the disclosed cases it looks like a passable auditor. Every pair holds
+the numbers fixed and moves something it cannot see, so it solves none of
+them — and endorses two records the suite knows to be broken.
+
+**What the pairs do not do**, stated plainly: they do not break
+qem-auditor's saturation. It scores 18/18 and 6/6 pairs. That is close to
+guaranteed and it is not a compliment — a constructed case's truth
+follows from the record by the same lattice this package implements, so
+the tool that defines the rules keeps passing cases derived from them.
+Constructed cases can only be hard for an auditor that reasons some other
+way. Breaking this package's saturation needs *disclosed* cases where the
+follow-up work disagreed with the verdict, and those are found by doing
+experiments, not by writing records.
+
+Constructed and disclosed cases are scored under separate labels and
+never blended into one headline, because a tool that scores well only on
+constructed cases has learned the schema, and a blended number would let
+that look like having learned the physics.
+
 Scoring your own auditor is four lines:
 
 ```python
@@ -552,7 +611,7 @@ qem_auditor/
   claim.py          what has been shown, what has not, what closes the gap
   agent.py          the loop, running by itself
   llm.py            provider-agnostic model access (optional)
-  trust.py          scores an AUDITOR: skill, and one disqualifying error
+  trust.py          scores an AUDITOR: skill, pairs, one fatal error
   report.py         console and self-contained HTML reports
   frontdoor.py      bring a circuit, get a verdict
   api.py / cli.py   the entry points
@@ -560,8 +619,9 @@ qem_auditor/
     sources.py      where expectation values come from: noiseless, or Aer noise
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
+  constructed.py    6 minimal pairs: one difference, opposite verdicts
 examples/           5 runnable end-to-end demonstrations
-tests/              474 tests
+tests/              488 tests
 ```
 
 Run it:

@@ -19,10 +19,11 @@ from qem_auditor.trust import (
     TrustGrade,
     builtin_auditor,
     constant_auditor,
+    number_reading_auditor,
     score,
 )
 
-from benchmarks.suite import CASES
+from benchmarks.suite import ALL_CASES, CASES, PAIRS
 
 BASELINES = [
     ("always-hedge (NOT ESTABLISHED)", Verdict.NOT_ESTABLISHED),
@@ -32,12 +33,23 @@ BASELINES = [
 
 
 def main() -> int:
-    report = score(builtin_auditor, CASES, "qem-auditor (this package)")
+    report = score(builtin_auditor, ALL_CASES, "qem-auditor (this package)", PAIRS)
     report.print_report()
+
+    # The number-reader is the evidence that the constructed pairs earn
+    # their place: it shows partial skill on the disclosed six alone and
+    # is disqualified once the pairs are in play. Both numbers are
+    # printed because only the contrast makes the point.
+    print()
+    score(number_reading_auditor, CASES,
+          "number-reader, disclosed cases only").print_report()
+    print()
+    score(number_reading_auditor, ALL_CASES,
+          "number-reader, with the pairs", PAIRS).print_report()
 
     for name, verdict in BASELINES:
         print()
-        score(constant_auditor(verdict), CASES, name).print_report()
+        score(constant_auditor(verdict), ALL_CASES, name, PAIRS).print_report()
 
     if report.grade is TrustGrade.DISQUALIFIED:
         print("\nFAIL: the built-in auditor endorsed a known artifact.", file=sys.stderr)

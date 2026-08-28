@@ -132,6 +132,29 @@ class TrustGrade(Enum):
     SUITE_SATURATED = "SUITE SATURATED (this suite cannot resolve further)"
 
 
+class CaseProvenance(Enum):
+    """Where a case came from.
+
+    DISCLOSED cases are real published results whose truth was settled by
+    the experiment's own history -- someone ran the follow-up work and
+    found out. CONSTRUCTED cases are built to isolate one discrimination;
+    their truth follows from the record as written, which is weaker
+    evidence about the world and stronger evidence about the auditor.
+
+    Both belong in a suite and they must never be blended into one
+    headline number without saying so. A tool that scores well only on
+    constructed cases has learned the schema; a suite that hides the
+    split lets it look like it has learned the physics. Reports break the
+    score down by provenance for exactly that reason.
+
+    CONSTRUCTED is the default: claiming a case is a real disclosed
+    result should take a deliberate act, not an omission.
+    """
+
+    DISCLOSED = "disclosed"
+    CONSTRUCTED = "constructed"
+
+
 @dataclass(frozen=True)
 class Case:
     """One scored case: a record, and what it is known to deserve.
@@ -146,6 +169,7 @@ class Case:
     truth: Verdict
     what_it_tests: str
     truth_mode: Optional[FailureMode] = None
+    provenance: CaseProvenance = CaseProvenance.CONSTRUCTED
 
     def __post_init__(self) -> None:
         if not self.what_it_tests.strip():
@@ -169,6 +193,44 @@ class Answer:
 
     verdict: Verdict
     primary_mode: Optional[FailureMode] = None
+
+
+@dataclass(frozen=True)
+class Pair:
+    """Two cases differing in ONE stated respect, where that difference
+    is supposed to move the verdict.
+
+    Aggregate accuracy is generous to an auditor that has learned which
+    records tend to be bad. A minimal pair is not: both members look
+    alike, so the only way to score the pair is to react to the thing
+    that actually differs. Credit is all-or-nothing across the two --
+    getting one right and one wrong is what guessing looks like, and it
+    should pay what guessing is worth.
+
+    `difference` is the one field that moved; `why_it_matters` is the
+    argument that it should. A pair that cannot state both is two cases
+    that happen to resemble each other.
+    """
+
+    pair_id: str
+    case_a: str
+    case_b: str
+    difference: str
+    why_it_matters: str
+
+    def __post_init__(self) -> None:
+        if self.case_a == self.case_b:
+            raise ValueError(
+                f"pair {self.pair_id!r} names the same case twice; a case "
+                "cannot be a minimal pair with itself"
+            )
+        for text, label in ((self.difference, "difference"),
+                            (self.why_it_matters, "why_it_matters")):
+            if not text.strip():
+                raise ValueError(
+                    f"pair {self.pair_id!r} does not state its {label}; a pair "
+                    "that cannot say what differs is two unrelated cases"
+                )
 
 
 #: An auditor may return a bare Verdict; `normalise_answer` widens it.
@@ -209,6 +271,7 @@ class CaseResult:
     credit: float
     truth_mode: Optional[FailureMode]
     given_mode: Optional[FailureMode]
+    provenance: CaseProvenance
     #: None when attribution was not in play: the case has no pinned
     #: cause, or the auditor endorsed the record, so it never offered
     #: one. Scoring a diagnosis on a case the auditor waved through would
@@ -263,6 +326,11 @@ class TrustReport:
     results: list[CaseResult]
     baseline_verdict: Verdict
     baseline_credit: float
+    pairs: list[Pair] = field(default_factory=list)
+
+    @property
+    def by_id(self) -> dict[str, CaseResult]:
+        return {r.case_id: r for r in self.results}
 
     @property
     def n(self) -> int:
@@ -312,6 +380,35 @@ class TrustReport:
         return sum(1 for r in scored if r.attribution), len(scored)
 
     @property
+    def pair_score(self) -> Optional[tuple[int, int]]:
+        """(pairs solved, pairs offered), where a pair is solved only if
+        BOTH members are exact. None when the suite defines no pairs."""
+        if not self.pairs:
+            return None
+        results = self.by_id
+        solved = 0
+        for pair in self.pairs:
+            a, b = results.get(pair.case_a), results.get(pair.case_b)
+            if a is None or b is None:
+                raise ValueError(
+                    f"pair {pair.pair_id!r} names a case not in this suite; "
+                    "the pair cannot be scored"
+                )
+            if a.error is ErrorKind.NONE and b.error is ErrorKind.NONE:
+                solved += 1
+        return solved, len(self.pairs)
+
+    def credit_on(self, provenance: CaseProvenance) -> Optional[float]:
+        subset = [r for r in self.results if r.provenance is provenance]
+        if not subset:
+            return None
+        return sum(r.credit for r in subset) / len(subset)
+
+    def exact_on(self, provenance: CaseProvenance) -> tuple[int, int]:
+        subset = [r for r in self.results if r.provenance is provenance]
+        return sum(1 for r in subset if r.error is ErrorKind.NONE), len(subset)
+
+    @property
     def grade(self) -> TrustGrade:
         if self.false_endorsements:
             return TrustGrade.DISQUALIFIED
@@ -348,6 +445,18 @@ class TrustReport:
         attr = self.attribution
         if attr is not None:
             lines.append(f"  attribution    {attr[0]}/{attr[1]} causes named correctly")
+        pairs = self.pair_score
+        if pairs is not None:
+            lines.append(f"  PAIRS          {pairs[0]}/{pairs[1]} solved "
+                         "(both members exact, or no credit)")
+        # Never one blended number: a tool can score well on constructed
+        # cases by learning the schema, and the split is what shows it.
+        split = [(p, self.exact_on(p)) for p in CaseProvenance]
+        if len([1 for _p, (_e, n) in split if n]) > 1:
+            for provenance, (exact, n) in split:
+                if n:
+                    lines.append(f"    {provenance.value:12s} {exact}/{n} exact, "
+                                 f"credit {self.credit_on(provenance):.3f}")
         for kind in (ErrorKind.FALSE_ENDORSEMENT, ErrorKind.OVER_CLAIM,
                      ErrorKind.FALSE_CONDEMNATION):
             hits = self.errors_of(kind)
@@ -371,7 +480,8 @@ class TrustReport:
 
 
 def score(auditor: AuditorFn, cases: Sequence[Case],
-          name: str = "unnamed") -> TrustReport:
+          name: str = "unnamed",
+          pairs: Sequence[Pair] = ()) -> TrustReport:
     """Run `auditor` over `cases` and score it.
 
     The auditor sees only the Experiment -- never the truth verdict, never
@@ -405,10 +515,15 @@ def score(auditor: AuditorFn, cases: Sequence[Case],
             credit=CREDIT[error],
             truth_mode=case.truth_mode,
             given_mode=answer.primary_mode,
+            provenance=case.provenance,
             attribution=attribution,
         ))
     baseline_verdict, baseline_credit = best_constant(cases)
-    return TrustReport(name, results, baseline_verdict, baseline_credit)
+    report = TrustReport(name, results, baseline_verdict, baseline_credit, list(pairs))
+    # Surface a pair naming a missing case now, at scoring time, rather
+    # than when someone reads the number off the report.
+    report.pair_score
+    return report
 
 
 def constant_auditor(verdict: Verdict) -> AuditorFn:
@@ -419,6 +534,34 @@ def constant_auditor(verdict: Verdict) -> AuditorFn:
         return Answer(verdict)
 
     return _auditor
+
+
+def number_reading_auditor(exp: Experiment) -> Answer:
+    """A baseline that reads the results table and nothing else.
+
+    Not a straw man: this is what eyeballing a paper's summary numbers
+    looks like, and it is a fair description of how most claims are
+    actually assessed. It condemns when the mitigation made things worse,
+    certifies a small error with enough replicates, and hedges otherwise.
+
+    It is included because it is the demonstration that the constructed
+    minimal pairs earn their place. On the six disclosed cases it scores
+    partial skill and looks like a passable auditor. On the pairs it
+    solves none, because every pair holds the numbers fixed and moves
+    something it cannot see -- and it endorses two records the suite
+    knows to be broken, which disqualifies it outright.
+    """
+    raw = exp.outputs.raw_error_kcal
+    mitigated = exp.outputs.mitigated_error_kcal
+    if raw is None or mitigated is None:
+        return Answer(Verdict.NOT_ESTABLISHED)
+    if mitigated > raw:
+        return Answer(Verdict.INVALID)
+    if mitigated <= 0.25 and len(exp.outputs.replicates) >= 8:
+        return Answer(Verdict.CERTIFIED_UNDER_SCOPE)
+    if mitigated < raw:
+        return Answer(Verdict.PROMISING)
+    return Answer(Verdict.NOT_ESTABLISHED)
 
 
 def builtin_auditor(exp: Experiment) -> Answer:

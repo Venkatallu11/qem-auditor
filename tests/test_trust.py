@@ -11,6 +11,7 @@ from qem_auditor import FailureMode, Verdict
 from qem_auditor.trust import (
     Answer,
     Case,
+    Pair,
     ErrorKind,
     Stance,
     TrustGrade,
@@ -270,3 +271,152 @@ class RealSuiteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProvenanceTest(unittest.TestCase):
+    def test_constructed_is_the_default(self):
+        """Claiming a case is a real disclosed result should take a
+        deliberate act, not an omission."""
+        from qem_auditor.trust import CaseProvenance
+
+        self.assertIs(_case("x", Verdict.INVALID).provenance,
+                      CaseProvenance.CONSTRUCTED)
+
+    def test_the_disclosed_six_are_labelled_disclosed(self):
+        from benchmarks.suite import CASES
+        from qem_auditor.trust import CaseProvenance
+
+        for case in CASES:
+            with self.subTest(case=case.case_id):
+                self.assertIs(case.provenance, CaseProvenance.DISCLOSED)
+
+    def test_the_score_is_reported_per_provenance_not_only_blended(self):
+        """A tool can score well on constructed cases by learning the
+        schema. The split is what shows it."""
+        from benchmarks.suite import ALL_CASES
+        from qem_auditor.trust import CaseProvenance, number_reading_auditor
+
+        report = score(number_reading_auditor, ALL_CASES, "number-reader")
+        for provenance in CaseProvenance:
+            self.assertIsNotNone(report.credit_on(provenance))
+        self.assertIn("disclosed", report.format_report())
+        self.assertIn("constructed", report.format_report())
+
+
+class PairTest(unittest.TestCase):
+    def _pair_suite(self):
+        good = _case("good", Verdict.CERTIFIED_UNDER_SCOPE)
+        bad = _case("bad", Verdict.INVALID)
+        pair = Pair("p", "good", "bad", "one field", "because it matters")
+        return [good, bad], [pair]
+
+    def test_getting_one_member_right_earns_nothing(self):
+        """Half a pair is what guessing looks like."""
+        cases, pairs = self._pair_suite()
+        report = score(constant_auditor(Verdict.INVALID), cases, "half", pairs)
+        self.assertEqual(report.exact, 1)
+        self.assertEqual(report.pair_score, (0, 1))
+
+    def test_getting_both_right_earns_the_pair(self):
+        cases, pairs = self._pair_suite()
+        truth = {c.case_id: c.truth for c in cases}
+        by_obj = {id(c.experiment): truth[c.case_id] for c in cases}
+        report = score(lambda e: Answer(by_obj[id(e)]), cases, "oracle", pairs)
+        self.assertEqual(report.pair_score, (1, 1))
+
+    def test_no_pairs_means_no_pair_score(self):
+        self.assertIsNone(score(builtin_auditor, SUITE, "x").pair_score)
+
+    def test_a_pair_naming_a_missing_case_fails_at_scoring_time(self):
+        cases, _ = self._pair_suite()
+        stray = [Pair("p", "good", "not_in_suite", "a field", "a reason")]
+        with self.assertRaises(ValueError):
+            score(builtin_auditor, cases, "x", stray)
+
+    def test_a_pair_cannot_be_a_case_with_itself(self):
+        with self.assertRaises(ValueError):
+            Pair("p", "same", "same", "a field", "a reason")
+
+    def test_a_pair_must_state_what_differs_and_why(self):
+        with self.assertRaises(ValueError):
+            Pair("p", "a", "b", "  ", "a reason")
+        with self.assertRaises(ValueError):
+            Pair("p", "a", "b", "a field", "")
+
+
+class ConstructedSuiteTest(unittest.TestCase):
+    """The minimal pairs, and the evidence that they earn their place."""
+
+    def setUp(self):
+        from benchmarks.suite import ALL_CASES, CASES, PAIRS
+
+        self.disclosed = CASES
+        self.all_cases = ALL_CASES
+        self.pairs = PAIRS
+
+    def test_every_constructed_record_is_internally_consistent(self):
+        from qem_auditor.integrity import integrity_violations
+        from qem_auditor.trust import CaseProvenance
+
+        for case in self.all_cases:
+            if case.provenance is not CaseProvenance.CONSTRUCTED:
+                continue
+            with self.subTest(case=case.case_id):
+                self.assertEqual(integrity_violations(case.experiment), [])
+
+    def test_each_pair_members_differ_only_in_their_stated_respect(self):
+        """If two pair members differ in several ways, a correct answer
+        no longer attributes to the one thing the pair is about."""
+        import dataclasses
+
+        by_id = {c.case_id: c.experiment for c in self.all_cases}
+        for pair in self.pairs:
+            with self.subTest(pair=pair.pair_id):
+                a, b = by_id[pair.case_a], by_id[pair.case_b]
+                differing = [
+                    f.name for f in dataclasses.fields(a)
+                    if f.name not in ("experiment_id", "description", "claim")
+                    and getattr(a, f.name) != getattr(b, f.name)
+                ]
+                # controls/outputs are the fields a pair is allowed to move.
+                self.assertLessEqual(
+                    set(differing) - {"controls", "outputs", "claim_type"}, set(),
+                    f"{pair.pair_id} differs in {differing}")
+
+    def test_the_pairs_make_the_top_verdict_reachable(self):
+        """Before them, no case in the suite reached CERTIFIED UNDER
+        SCOPE, so an auditor incapable of the top verdict scored the same
+        as one that could produce it."""
+        self.assertNotIn(Verdict.CERTIFIED_UNDER_SCOPE,
+                         {c.truth for c in self.disclosed})
+        self.assertIn(Verdict.CERTIFIED_UNDER_SCOPE,
+                      {c.truth for c in self.all_cases})
+
+    def test_the_pairs_expose_an_auditor_the_disclosed_cases_flatter(self):
+        """The whole justification for the constructed half, measured
+        rather than asserted."""
+        from qem_auditor.trust import TrustGrade, number_reading_auditor
+
+        flattered = score(number_reading_auditor, self.disclosed, "reader")
+        self.assertGreater(flattered.skill, 0.0)
+        self.assertIs(flattered.grade, TrustGrade.PARTIAL_SKILL)
+
+        exposed = score(number_reading_auditor, self.all_cases, "reader", self.pairs)
+        self.assertEqual(exposed.pair_score[0], 0)
+        self.assertIs(exposed.grade, TrustGrade.DISQUALIFIED)
+
+    def test_the_suite_now_exercises_gates_the_disclosed_cases_never_ran(self):
+        from qem_auditor import audit
+
+        def outcomes(cases):
+            seen = {}
+            for case in cases:
+                for result in audit(case.experiment).gate_results:
+                    seen.setdefault(result.name, set()).add(result.passed)
+            return seen
+
+        before, after = outcomes(self.disclosed), outcomes(self.all_cases)
+        self.assertNotIn(True, before["mitigation_benefit"])
+        self.assertIn(True, after["mitigation_benefit"])
+        self.assertNotIn(True, before["independent_verification"])
+        self.assertIn(True, after["independent_verification"])
