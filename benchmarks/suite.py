@@ -15,7 +15,7 @@ machinery lives in `qem_auditor.trust` and knows nothing about these
 cases; the cases live here and depend on the package. A benchmark that
 its own subject imports is not a benchmark.
 """
-from qem_auditor.trust import Case
+from qem_auditor.trust import Case, CaseProvenance
 
 from . import (
     h4_ancilla_qed,
@@ -73,7 +73,18 @@ def _case(module) -> Case:
         truth=module.EXPECTED_VERDICT,
         what_it_tests=_WHAT_EACH_TESTS[key],
         truth_mode=getattr(module, "EXPECTED_PRIMARY_FAILURE_MODE", None),
+        provenance=CaseProvenance.DISCLOSED,
     )
 
 
+#: The disclosed six, whose truth was settled by the project's own
+#: follow-up work rather than by any rule in this package.
 CASES = [_case(m) for m in _MODULES]
+
+#: The disclosed six plus the constructed minimal pairs. Scored together
+#: the split still shows: `qem_auditor.trust` reports exact-match and
+#: credit separately for each provenance, so a tool that has learned the
+#: schema cannot hide behind a blended headline.
+from .constructed import CASES as CONSTRUCTED_CASES, PAIRS  # noqa: E402
+
+ALL_CASES = CASES + CONSTRUCTED_CASES
