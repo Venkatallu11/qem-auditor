@@ -372,6 +372,13 @@ class Prescription:
     cost: Cost
     evidence: str
     risks: tuple = ()
+    #: What a supplied corpus of past audits says about this method on
+    #: budgets like this one. None when no ledger was consulted.
+    #:
+    #: Typed loosely on purpose: `ledger.py` imports this module for the
+    #: catalogue, so this module must not import it back. A ledger is
+    #: anything answering `evidence_for` and `contradictions`.
+    observed: object = None
 
     def format_lines(self) -> list[str]:
         lines = [f"  -> {self.action}",
@@ -386,6 +393,8 @@ class Prescription:
             lines.append("                  the error terms add in magnitude")
         lines += [f"       cost:    {self.cost}",
                   f"       basis:   {self.evidence}"]
+        if self.observed is not None and getattr(self.observed, "n", 0):
+            lines.append(f"       seen:    {self.observed.summarise()}")
         for risk in self.risks:
             lines.append(f"       risk:    {risk}")
         return lines
@@ -474,7 +483,8 @@ def _best_case(coverage: float, budget: ErrorBudget) -> Optional[float]:
 def prescribe(budget: ErrorBudget,
               noise_model_verified: bool = False,
               symmetry_available: bool = False,
-              shots: Optional[int] = None) -> Consult:
+              shots: Optional[int] = None,
+              ledger=None) -> Consult:
     """Turn an error budget into ranked advice.
 
     `noise_model_verified` gates the model-dependent methods. PEC is not
@@ -487,6 +497,16 @@ def prescribe(budget: ErrorBudget,
     a state obeys a checkable symmetry in the measured basis is a fact
     about the physics that no amount of looking at an error budget
     reveals.
+
+    `ledger` is an optional corpus of past audits (see `ledger.py`). When
+    supplied it is consulted, cited, and allowed to REORDER the
+    recommendations -- but only when it holds enough observations on
+    similar budgets to support a ranking for every candidate being
+    compared. Below that the mechanism ordering stands and the
+    observations are reported beside it, because a median of three runs
+    that happens to disagree with the physics is three runs, not a
+    finding. Which ordering was used is stated in the report rather than
+    left for a reader to infer.
     """
     if not budget.contributions or budget.total <= 0:
         return Consult(
@@ -582,6 +602,16 @@ def prescribe(budget: ErrorBudget,
     #: below that the run usually costs more than the answer improves.
     WORTH_A_RUN = 0.4
 
+    observations = {}
+    if ledger is not None:
+        for method, _ in ranked:
+            observations[method.name] = ledger.evidence_for(method.name, budget)
+        for name, why in ledger.contradictions(budget):
+            caveats.append(f"The corpus disagrees with the catalogue about "
+                           f"{name}: {why}. That is a finding about this "
+                           f"package's own mechanism table, not a rounding "
+                           f"error, and it is reported rather than averaged in.")
+
     prescriptions, marginal = [], []
     for method, coverage in ranked:
         reached = [s.name for s, _ in budget.ranked
@@ -606,8 +636,22 @@ def prescribe(budget: ErrorBudget,
             cost=method.cost,
             evidence=method.evidence,
             risks=tuple(risks),
+            observed=observations.get(method.name),
         )
         (prescriptions if coverage >= WORTH_A_RUN else marginal).append(prescription)
+
+    # Observations outrank mechanism only when there are enough of them
+    # for every method being compared. A partial corpus reordering a
+    # ranking would let the best-studied method win rather than the best
+    # one.
+    if prescriptions and observations:
+        relevant = [observations.get(p.action) for p in prescriptions]
+        if all(e is not None and e.supports_a_ranking for e in relevant):
+            prescriptions.sort(key=lambda p: -observations[p.action].median_gain)
+            caveats.append(
+                "Ordered by what past audits measured on budgets like this one, "
+                "not by mechanism: the corpus holds enough observations on every "
+                "method compared here to support a ranking.")
 
     return Consult(budget=budget,
                    prescriptions=tuple(prescriptions),
@@ -685,6 +729,40 @@ def budget_from_calibration(*,
         contributions={k: v for k, v in contributions.items() if v > 0},
         provenance=Provenance.SELF_REPORTED,
         note="estimated from calibration and gate counts, not measured by ablation",
+    )
+
+
+def residual_budget(budget: ErrorBudget, method: "Method",
+                    effectiveness: float = 0.9) -> ErrorBudget:
+    """What is left over after a method runs.
+
+    Needed because choosing qubits and choosing a mitigation method are
+    not independent, which is easy to miss and expensive to get wrong.
+    Measured case: on fake_kyiv the lowest-readout pair beats the
+    lowest-gate-error pair 13.87 to 36.46 kcal/mol unmitigated -- and
+    then LOSES 11.02 to 6.18 once readout mitigation is applied, because
+    REM removes the readout error that made the first pair attractive and
+    leaves the gate error where it is 2.2x worse.
+
+    So a placement chosen against the raw budget is the right answer only
+    for someone running raw. Anyone planning to mitigate should choose
+    against what their method will leave behind, which is what this
+    returns.
+
+    `effectiveness` is how much of a reachable term the method actually
+    removes. It is deliberately below 1: no method removes a term
+    completely, and a residual budget that zeroed a source would claim
+    the placement no longer cares about it at all.
+    """
+    if not 0.0 < effectiveness <= 1.0:
+        raise ValueError(f"effectiveness={effectiveness} is not a fraction")
+    removed = method.reach_fraction * effectiveness
+    return ErrorBudget(
+        contributions={
+            source: value * (1.0 - removed) if source in method.reaches else value
+            for source, value in budget.contributions.items()},
+        provenance=budget.provenance,
+        note=f"what remains after {method.name}",
     )
 
 

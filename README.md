@@ -508,6 +508,71 @@ now says so.
 python examples/prescribe_for_circuit.py    # ~30s, needs qiskit-aer
 ```
 
+### The cheapest fix is usually not a method — it is different qubits
+
+`qem_auditor.layout` picks where to run. Measured on `fake_kyiv`, same
+circuit, same shots, only `initial_layout` changed:
+
+| placement | measured error |
+|---|---|
+| best available | **14.1 kcal/mol** |
+| median | 36.6 |
+| worst | **330.0** |
+
+A **23x range**, free. A user unlucky in their layout pays that while
+concluding their method is weak.
+
+The part that is easy to get wrong: **which qubit property to optimise
+depends on which error dominates.** Picking the lowest-gate-error pair is
+the obvious move and it is wrong on a readout-dominated device — this
+project's own device audit hand-picked qubits `(119, 120)` by gate error
+and paid 36.46 kcal/mol where a budget-aware pick paid 13.87. So
+placements are scored against the error budget's own weights, and the
+same coupling map gives opposite answers for different budgets.
+
+And a second-order effect worth knowing, because it inverts the answer:
+
+| placement | raw | with REM |
+|---|---|---|
+| lowest readout `(96, 97)` | **13.87** | 11.02 |
+| lowest gate error `(119, 120)` | 36.46 | **6.18** |
+
+REM removes the readout error that made the first pair attractive and
+leaves the gate error, where that pair is 2.2x worse. **Choosing qubits
+and choosing a method are one decision, not two** — so `advise_layout`
+takes an `after_method` and scores against what that method will *leave*.
+
+### Every audit makes the next one better
+
+The catalogue is frozen: it knows what happened on two noise models and
+one molecule, and it would still say so after a thousand real audits had
+disagreed. `qem_auditor.ledger` is the part that accumulates. Each
+measured outcome is appended, and later prescriptions cite what actually
+happened on budgets like yours.
+
+Three rules keep it from laundering guesses into evidence:
+
+- **Content-addressed.** The same run recorded twice does not become two
+  data points — a duplicate is caught by what it says, not by whether
+  someone remembered to deduplicate.
+- **Small samples say they are small.** Below five observations the
+  corpus reports what it saw and declines to rank on it; the mechanism
+  ordering stands. And it only reorders when it has enough observations
+  for *every* method being compared, otherwise the best-studied method
+  wins rather than the best one.
+- **Disagreement is surfaced, not absorbed.** If measured outcomes stop
+  matching what a method claims — either a method that should work and
+  doesn't, or one that shouldn't and does — that is reported as a finding
+  about this package's own mechanism table.
+
+It is a plain JSON file: inspectable, diffable, deletable. A recommender
+that improves in ways nobody can read is not an improvement anybody
+should accept.
+
+```bash
+python examples/better_next_time.py    # ~15s, needs qiskit-aer
+```
+
 The prescription also refuses to prescribe. When shot noise dominates it
 says take more shots and warns that extrapolating first makes that term
 *worse*. When the ansatz cannot represent the answer it recommends no
@@ -835,6 +900,8 @@ qem_auditor/
   verdict.py        gate results -> one of 8 verdicts
   failure_modes.py  why it failed, and the cheapest fix
   prescribe.py      what to do about it: error budget -> ranked advice
+  layout.py         which qubits to run on, weighted by the budget
+  ledger.py         the corpus that makes each audit inform the next
   adversary.py      generates falsification experiments
   executor.py       runs them; never pretends about what it could not run
   reconstruct.py    the interface that lets it attack your fitting code
@@ -857,8 +924,8 @@ benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   methods.py        9 mitigation methods to be audited, 2 of them frauds
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           9 runnable end-to-end demonstrations
-tests/              550 tests
+examples/           10 runnable end-to-end demonstrations
+tests/              597 tests
 ```
 
 Run it:
@@ -876,6 +943,7 @@ python examples/live_h2_audit.py            # a real H2 run, audited live (qiski
 python examples/real_device_audit.py        # the same claim on measured IBM calibration
 python examples/method_shootout.py --quick  # 9 methods, 2 noise models, audited
 python examples/prescribe_for_circuit.py    # the fix, prescribed and then checked
+python examples/better_next_time.py         # qubit choice, and the growing corpus
 python -m unittest discover -s tests -t .   # full suite
 ```
 
