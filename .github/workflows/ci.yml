@@ -75,6 +75,9 @@ jobs:
       # The same claim under IBM's MEASURED fake_kyiv calibration, which
       # is where ZNE's improvement collapses.
       - run: python examples/real_device_audit.py
+      # Nine methods, two noise models, one auditor. --quick halves the
+      # runs; the findings it checks hold at either size.
+      - run: python examples/method_shootout.py --quick
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

@@ -385,6 +385,65 @@ alone; with `pip install 'qem-auditor[devices]'` a test compares the
 pinned copy against the live snapshot, because a pinned number that
 drifts from its source is a transcription claiming to be a measurement.
 
+### Nine methods, two noise models, one auditor
+
+ZNE is one method among many, so `benchmarks/methods.py` implements nine
+and `examples/method_shootout.py` audits all of them. Each gets the same
+access to the device — circuits in, counts out — and none holds the exact
+answer. Two of the nine are there to be refused rather than ranked.
+
+| method | invented noise | measured `fake_kyiv` |
+|---|---|---|
+| unmitigated | 21.95 | 36.46 |
+| REM (readout) | 21.70 | **6.18** |
+| ZNE (fold 1,3,5) | **3.97** | 30.95 |
+| REM + ZNE | 3.77 | **1.56** |
+| symmetry verification | 11.58 | 7.09 |
+| CDR (Clifford regression) | 1.77 | 1.78 |
+| PEC (model inversion) | 2.03 | 17.13 |
+| dressed identity | 21.95 | 36.46 |
+| oracle peek (fraud) | *0.44* | *0.73* |
+
+Median error in kcal/mol over 8 independent runs. Four findings, and only
+the first was expected:
+
+**ZNE and REM change places.** ZNE is the best single method under the
+invented noise and nearly useless under the measured one; REM is useless
+under the invented noise and the largest single win under the measured
+one. *Ranking mitigation methods on one noise model ranks nothing.*
+
+**CDR is the only method that barely moves between them** (1.77 → 1.78).
+It learns the noise map from data instead of assuming its structure. PEC,
+which assumes the structure, is the one that collapses — 2.03 → 17.13 —
+which is `CALIBRATION_MISMATCH` happening rather than being warned about.
+
+**On accuracy alone the fraud wins both tables.** `oracle peek` looks at
+the answer. A leaderboard ranked on error crowns it. What catches it is
+`data_sensitivity`: scramble the outcome labels and every honest method's
+answer moves as much as the raw estimate does (ratios 0.82–1.12), while
+the fraud moves 2% as far (**0.020**). The bar sits in an empty gap, not
+tuned against either side. That is `T_label` from the failure grammar,
+pointed at a mitigation method.
+
+**Two frauds need two detectors.** The `dressed identity` runs every
+circuit ZNE runs and returns the raw value anyway — pipelines really do
+end up here, via an extrapolation whose coefficients collapse to (1,0,0)
+or a flag that silently turned the correction off. It *passes* the
+scramble attack, because it genuinely reads the data; it just does
+nothing with it. The improvement gate is what refuses it, and both
+tables land it at `REFUTED`.
+
+The auditor also refuses the method with the best median. **REM+ZNE
+scores 1.56 on the measured noise and ranges 0.34 → 5.51 across runs** —
+a 16x lottery — while CDR's median is 0.2 worse and far steadier. On the
+single run a real experiment gets, the median winner is the one you can
+least rely on. That is what `tail_risk` and `reproducibility` are for.
+
+```bash
+python examples/method_shootout.py            # ~3m, needs qiskit-aer
+python examples/method_shootout.py --quick    # ~1m45, what CI runs
+```
+
 ---
 
 **This run also found a bug in the auditor.** The gates separate "failed"
@@ -725,9 +784,10 @@ qem_auditor/
     sources.py      where expectation values come from: noiseless, or Aer noise
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
+  methods.py        9 mitigation methods to be audited, 2 of them frauds
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           7 runnable end-to-end demonstrations
-tests/              503 tests
+examples/           8 runnable end-to-end demonstrations
+tests/              518 tests
 ```
 
 Run it:
@@ -743,6 +803,7 @@ python examples/autonomous_audit.py         # the agent, unattended (qiskit)
 python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
 python examples/live_h2_audit.py            # a real H2 run, audited live (qiskit-aer)
 python examples/real_device_audit.py        # the same claim on measured IBM calibration
+python examples/method_shootout.py --quick  # 9 methods, 2 noise models, audited
 python -m unittest discover -s tests -t .   # full suite
 ```
 
