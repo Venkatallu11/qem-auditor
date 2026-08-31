@@ -103,3 +103,89 @@ class GateContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NumpyBooleanTest(unittest.TestCase):
+    """A control set from a numpy comparison must not vanish.
+
+    The gates separate "failed" from "never run" with `is False`, which
+    is exact -- and numpy.bool_ is equal to False without being it. So
+    `extrapolation_in_domain = error <= tolerance`, the most natural line
+    anyone doing quantum work would write, used to store a value that
+    read as "not recorded". A measured failure disappeared and the
+    verdict softened from INVALID to NOT ESTABLISHED with nothing to show
+    it had happened. Found by running a real audit, not by reading code.
+    """
+
+    def setUp(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:  # pragma: no cover - environment dependent
+            self.skipTest("numpy not installed")
+
+    def test_a_numpy_false_is_stored_as_a_real_false(self):
+        import numpy as np
+
+        from qem_auditor import Controls
+
+        controls = Controls()
+        controls.extrapolation_in_domain = np.float64(5.1) <= np.float64(3.9)
+        self.assertIs(controls.extrapolation_in_domain, False)
+
+    def test_a_numpy_true_is_stored_as_a_real_true(self):
+        import numpy as np
+
+        from qem_auditor import Controls
+
+        self.assertIs(Controls(ideal_control=np.True_).ideal_control, True)
+
+    def test_the_constructor_normalises_too_not_only_assignment(self):
+        import numpy as np
+
+        from qem_auditor import Controls
+
+        self.assertIs(Controls(determinism_check=np.False_).determinism_check, False)
+
+    def test_a_numpy_failed_control_actually_fails_its_gate(self):
+        """The end of the chain: the gate must see the failure."""
+        import numpy as np
+
+        from qem_auditor import gates
+
+        from .helpers import make_experiment
+
+        exp = make_experiment(ideal_control=np.False_)
+        self.assertIs(gates.ideal_control_gate(exp).passed, False)
+
+    def test_a_numpy_failure_still_reaches_the_verdict(self):
+        import numpy as np
+
+        from qem_auditor import Verdict, audit
+
+        from .helpers import make_experiment
+
+        self.assertIs(audit(make_experiment(target_leakage_check=np.False_)).verdict,
+                      Verdict.INVALID)
+
+    def test_an_ambiguous_value_is_refused_rather_than_guessed(self):
+        """Silently reading 1, 0.0 or "no" as a verdict is the same
+        mistake in a different coat."""
+        from qem_auditor import Controls
+
+        for value in (1, 0, 0.0, "no", "False", [], object()):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    Controls(ideal_control=value)
+
+    def test_none_still_means_never_run(self):
+        from qem_auditor import Controls
+
+        self.assertIsNone(Controls(ideal_control=None).ideal_control)
+
+    def test_a_numpy_integer_is_not_silently_a_boolean(self):
+        import numpy as np
+
+        from qem_auditor import Controls
+
+        with self.assertRaises(TypeError):
+            Controls(ideal_control=np.int64(1))

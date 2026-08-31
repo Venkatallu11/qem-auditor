@@ -25,8 +25,20 @@ jobs:
       # answer on the suite, which no single-verdict test would catch.
       - run: python run_trust.py
       - run: python run_audit_loop.py
+      # Stdlib only: circuit memory needs no backend.
+      - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
+      # The wiring, exercised as a user meets it: a verdict arrives with a
+      # remedy, and a second audit remembers the first.
+      - run: |
+          set +e
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor audit /tmp/t.json > /tmp/a1.txt
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor audit /tmp/t.json > /tmp/a2.txt
+          set -e
+          grep -q "NO REMEDY OFFERED" /tmp/a1.txt
+          grep -q "WHAT THIS REMINDS THE AUDITOR OF" /tmp/a2.txt
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor remember | grep -q "remembered"
       # Every CLI subcommand, so a broken entry point fails here rather
       # than for whoever runs it. `audit` and `attack` exit non-zero by
       # design on an unproven record, so the exit CODE is what gets
@@ -58,7 +70,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[adapters]" qiskit-aer
+      # Devices too, and BEFORE the tests: the drift check that compares
+      # the example's pinned calibration against the fake_kyiv snapshot
+      # skips when it is missing, which would quietly retire the check.
+      - run: pip install -e ".[adapters,devices]" qiskit-aer
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
@@ -66,6 +81,23 @@ jobs:
       - run: python examples/attack_a_pipeline.py
       - run: python examples/autonomous_audit.py
       - run: python examples/check_under_noise.py
+      # A live end-to-end audit: real molecule, real noise, real mitigation,
+      # numbers the auditor measured itself rather than any record on disk.
+      - run: python examples/live_h2_audit.py
+      # The same claim under IBM's MEASURED fake_kyiv calibration, which
+      # is where ZNE's improvement collapses.
+      - run: python examples/real_device_audit.py
+      # Nine methods, two noise models, one auditor. --quick halves the
+      # runs; the findings it checks hold at either size.
+      - run: python examples/method_shootout.py --quick
+      # The other half of the loop: estimate the budget from calibration,
+      # prescribe from it, then RUN the advice and check it held.
+      - run: python examples/prescribe_for_circuit.py
+      # Qubit selection driven by the error budget, and the ledger that
+      # makes each audit inform the next.
+      - run: python examples/better_next_time.py
+      # A second physical system: does any of the above generalise?
+      - run: python examples/second_system.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

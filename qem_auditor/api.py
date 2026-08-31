@@ -38,6 +38,9 @@ from .power import PowerAnalysis, analyze_experiment
 from .claim import CompiledClaim, compile_claim
 from .failure_modes import FailureAnalysis, classify
 from .planner import CandidateExperiment, candidates_from_audit, next_experiment
+from .memory import Recollection, fingerprint_from_spec
+from .prescribe import Consult, ErrorBudget, prescribe
+from .store import Store
 from .schema import Experiment, FailureMode
 from .verdict import AuditReport, Verdict, audit as _audit
 
@@ -58,6 +61,24 @@ class AuditResult:
     """(control, why) the auditor structurally cannot establish from the
     artifacts it was given. Distinguishes 'your method failed this' from
     'nobody could check this from a circuit alone'."""
+
+    recalled: Optional[Recollection] = None
+    """What earlier audits of circuits like this one found.
+
+    Advisory, always. It reorders which checks to run first and warns
+    about what broke last time; it never contributes to the verdict.
+    A circuit resembling three that failed is not thereby failing, and
+    precedent that could convict would make a method that failed once
+    unable to be shown working."""
+
+    consult: Optional[Consult] = None
+    """What to do about it, when an error budget was supplied.
+
+    A verdict without this is half an answer: the person who brought the
+    circuit learns their afternoon was wasted and nothing about what
+    would not have wasted it. It is optional rather than always-on
+    because it needs a budget, and inventing one to have something to say
+    would be worse than saying nothing."""
 
     @property
     def verdict(self) -> Verdict:
@@ -95,6 +116,18 @@ class AuditResult:
             parts.append(f"\nUNTESTED ATTACK SURFACE ({len(self.attacks.attacks)}):")
             for a in self.attacks.attacks:
                 parts.append(f"  {a.attack_id}: {a.prediction.statistic}")
+        if self.recalled is not None and not self.recalled.is_empty:
+            parts.append("\nWHAT THIS REMINDS THE AUDITOR OF:")
+            parts.append(self.recalled.format_recollection())
+        if self.consult is not None:
+            parts.append("\n" + self.consult.format_consult())
+        else:
+            parts.append(
+                "\nNO REMEDY OFFERED: no error budget was supplied, and one is "
+                "not\nsomething this can invent. Pass `budget=` to audit() -- "
+                "see\n`prescribe.budget_from_calibration`, which needs only your "
+                "device's\npublished error rates and your own gate counts -- and "
+                "the verdict\ncomes back with what to do about it.")
         if self.measurements:
             parts.append("\nEXECUTED BY THE AUDITOR:")
             for m in self.measurements:
@@ -107,6 +140,8 @@ class AuditResult:
         if self.analysis.diagnoses:
             self.analysis.print_analysis()
         self.claim.print_claim()
+        if self.consult is not None:
+            self.consult.print_consult()
 
 
 class Auditor:
@@ -118,26 +153,70 @@ class Auditor:
     than a rubric.
     """
 
-    def __init__(self, adapter: Any | None = None) -> None:
+    def __init__(self, adapter: Any | None = None,
+                 store: Store | None = None) -> None:
         self.adapter = adapter
+        #: Where this auditor keeps what it has learned. None means it
+        #: learns nothing across calls, which is the library default:
+        #: importing a package should not start a file in someone's home
+        #: directory. `Store.open()` for a persistent one,
+        #: `Store.ephemeral()` for one that lasts a session.
+        self.store = store
         self._measurements: list[ControlMeasurement] = []
 
     # -- auditing ------------------------------------------------------
 
     def audit(self, experiment: Experiment | str | Path | dict,
-              propose_attacks: bool = True) -> AuditResult:
+              propose_attacks: bool = True,
+              budget: ErrorBudget | None = None,
+              symmetry_available: bool = False,
+              noise_model_verified: bool = False) -> AuditResult:
+        """Grade a record, and say what to do about it.
+
+        `budget` is what turns a verdict into a remedy. Without one the
+        result carries no prescription and says why, rather than
+        inventing an error budget in order to have advice to give --
+        which would be the confident stranger this package exists to
+        refuse.
+
+        A store, if one was given to the constructor, is consulted BEFORE
+        grading and written to after. What it returns never reaches the
+        gates: it reorders which checks to look at first and reports what
+        broke last time, and the verdict is this record's own.
+        """
         exp = self._coerce(experiment)
+        fingerprint = fingerprint_from_spec(exp.circuit)
+
+        recalled = None
+        if self.store is not None:
+            recalled = self.store.memory.recall(fingerprint)
+
         report = _audit(exp)
+        analysis = classify(exp, report, self._measurements)
+
+        consult = None
+        if budget is not None:
+            consult = prescribe(
+                budget,
+                noise_model_verified=noise_model_verified,
+                symmetry_available=symmetry_available,
+                ledger=self.store.ledger if self.store is not None else None)
+
+        if self.store is not None:
+            self.store.remember_audit(exp, report, fingerprint, analysis)
+
         return AuditResult(
             experiment=exp,
             report=report,
-            analysis=classify(exp, report, self._measurements),
+            analysis=analysis,
             claim=compile_claim(exp, report),
             gaps=candidates_from_audit(exp, report),
             measurements=list(self._measurements),
             attacks=(AdversarialScientist().propose(exp, report)
                      if propose_attacks else None),
             power=analyze_experiment(exp),
+            recalled=recalled,
+            consult=consult,
         )
 
     # -- the front door ------------------------------------------------

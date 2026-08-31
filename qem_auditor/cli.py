@@ -62,6 +62,129 @@ def _template() -> Experiment:
     )
 
 
+def _add_store_arguments(parser) -> None:
+    parser.add_argument("--store", metavar="DIR",
+                        help="where to keep what past audits found "
+                             "(default: $QEM_AUDITOR_STORE or ~/.qem-auditor)")
+    parser.add_argument("--no-store", action="store_true",
+                        help="do not read or write the corpus for this run")
+
+
+def _open_store(args):
+    """The store this invocation should use, or None.
+
+    The CLI accumulates by default and the library does not: a tool that
+    forgets everything between invocations is not much of a tool, and a
+    library that starts writing to a home directory on import is a
+    surprise. Where it is writing is printed the first time it creates
+    anything, so it is visible rather than silent.
+    """
+    from .store import Store
+
+    if getattr(args, "no_store", False):
+        return None
+    directory = getattr(args, "store", None)
+    store = Store.open(directory)
+    if not store.directory.exists():
+        print(f"note: remembering this audit in {store.directory} "
+              f"(--no-store to skip, --store DIR to move it)", file=sys.stderr)
+    return store
+
+
+def _budget_from(args):
+    """An error budget from a calibration file, or None.
+
+    None means no advice, which is the honest outcome of not knowing
+    where the error comes from. Nothing here guesses a budget in order to
+    have something to say.
+    """
+    path = getattr(args, "calibration", None)
+    if not path:
+        return None
+    from .prescribe import budget_from_calibration
+
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise RecordError(f"could not read calibration {path}: {e}") from e
+    missing = {"two_qubit_error", "one_qubit_error", "readout_error",
+               "two_qubit_gates", "one_qubit_gates", "measured_qubits",
+               "shots"} - set(data)
+    if missing:
+        raise RecordError(
+            f"calibration {path} is missing {', '.join(sorted(missing))}. "
+            "Every one of these is needed to attribute the error, and a "
+            "default for any of them would be a guess wearing a number's "
+            "clothes.")
+    return budget_from_calibration(
+        two_qubit_gates=data["two_qubit_gates"],
+        one_qubit_gates=data["one_qubit_gates"],
+        measured_qubits=data["measured_qubits"],
+        two_qubit_error=data["two_qubit_error"],
+        one_qubit_error=data["one_qubit_error"],
+        readout_error=data["readout_error"],
+        shots=data["shots"],
+        circuit_duration_s=data.get("circuit_duration_s"),
+        t2_s=data.get("t2_s"))
+
+
+def _render_guidance(result) -> str:
+    """The half of the answer that is not a verdict.
+
+    `report.render_console` re-derives its output from the record and so
+    cannot see what the audit found in memory or what it recommends --
+    which is how four working capabilities stayed invisible to everyone
+    using the command line. This appends them.
+    """
+    parts = []
+    if result.recalled is not None and not result.recalled.is_empty:
+        parts.append("\nWHAT THIS REMINDS THE AUDITOR OF")
+        parts.append(result.recalled.format_recollection())
+    if result.consult is not None:
+        parts.append("\n" + result.consult.format_consult())
+    else:
+        parts.append(
+            "\nNO REMEDY OFFERED\n"
+            "  No error budget was supplied, and one is not something this can\n"
+            "  invent. Pass --calibration with your device's published error\n"
+            "  rates and your own gate counts, and the verdict comes back with\n"
+            "  what to do about it.")
+    return "\n".join(parts)
+
+
+def _cmd_remember(args) -> int:
+    """What the corpus holds, and what it says about one circuit.
+
+    Exists because a corpus that silently steers recommendations and
+    cannot be read is the thing this package refuses everywhere else.
+    """
+    from .memory import fingerprint_from_spec
+
+    store = _open_store(args)
+    if store is None:
+        print("nothing to show: --no-store was given", file=sys.stderr)
+        return 0
+    print(store.summarise())
+
+    if not args.circuit:
+        if store.memory.cases:
+            print("\n  circuits remembered, most recent last:")
+            for case in store.memory.cases[-10:]:
+                failed = ", ".join(case.failed_gates) or "nothing failed"
+                print(f"    {case.experiment_id}: {case.verdict.value} -- {failed}")
+        return 0
+
+    try:
+        exp = record.load(args.circuit)
+    except RecordError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+    print()
+    print(store.memory.recall(fingerprint_from_spec(exp.circuit))
+          .format_recollection())
+    return 0
+
+
 def _cmd_audit(args) -> int:
     try:
         exp = record.load(args.path)
@@ -69,7 +192,18 @@ def _cmd_audit(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_BAD_RECORD
 
-    result = Auditor().audit(exp)
+    store = _open_store(args)
+    try:
+        budget = _budget_from(args)
+    except RecordError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    result = Auditor(store=store).audit(
+        exp, budget=budget,
+        symmetry_available=getattr(args, "symmetry", False))
+    if store is not None:
+        store.save()
 
     if args.json:
         print(json.dumps({
@@ -88,17 +222,35 @@ def _cmd_audit(args) -> int:
                 {"description": result.next_experiment.description,
                  "cost_usd": result.next_experiment.cost_usd}
                 if result.next_experiment else None),
+            "prescriptions": ([
+                {"action": p.action, "because": p.because,
+                 "best_case": p.best_case}
+                for p in result.consult.prescriptions]
+                if result.consult else None),
+            "will_not_help": ([{"method": n, "why": w}
+                               for n, w in result.consult.will_not_help]
+                              if result.consult else None),
+            "recalled": ({"seen_before": [c.experiment_id
+                                          for c in result.recalled.seen_before],
+                          "similar": [c.experiment_id
+                                      for c, _ in result.recalled.resembling],
+                          "check_first": [n for n, _, _ in
+                                          result.recalled.check_first]}
+                         if result.recalled and not result.recalled.is_empty
+                         else None),
         }, indent=2))
     elif args.html:
         from .report import render_console, render_html
 
         print(render_console(exp))
+        print(_render_guidance(result))
         Path(args.html).write_text(render_html(exp))
         print(f"\nwrote {args.html}")
     else:
         from .report import render_console
 
         print(render_console(exp))
+        print(_render_guidance(result))
 
     return EXIT_OK if result.verdict is Verdict.CERTIFIED_UNDER_SCOPE else EXIT_NOT_CERTIFIED
 
@@ -340,6 +492,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="emit machine-readable output")
     p_audit.add_argument("--html", metavar="PATH",
                          help="also write a self-contained HTML report")
+    p_audit.add_argument("--calibration", metavar="PATH",
+                         help="device error rates and gate counts, as JSON; "
+                              "turns the verdict into a remedy")
+    p_audit.add_argument("--symmetry", action="store_true",
+                         help="this state obeys a symmetry checkable in the "
+                              "measured basis, so post-selection is available")
+    _add_store_arguments(p_audit)
     p_audit.set_defaults(func=_cmd_audit)
 
     p_validate = sub.add_parser(
@@ -370,6 +529,15 @@ def build_parser() -> argparse.ArgumentParser:
         "blind", help="audit the record with its outcome hidden, then reveal")
     p_blind.add_argument("path")
     p_blind.set_defaults(func=_cmd_blind)
+
+    p_remember = sub.add_parser(
+        "remember",
+        help="show what past audits found, and what they found it in")
+    p_remember.add_argument("--circuit", metavar="PATH",
+                            help="a record whose circuit to recall against; "
+                                 "without one, summarise the whole corpus")
+    _add_store_arguments(p_remember)
+    p_remember.set_defaults(func=_cmd_remember)
 
     p_template = sub.add_parser("template", help="print a blank record to fill in")
     p_template.set_defaults(func=_cmd_template)

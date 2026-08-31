@@ -198,6 +198,43 @@ class NoiseSpec:
     calibration_uncertainty_propagated: bool = False
 
 
+#: Control fields carry three states, and the gates separate them with
+#: `is True` / `is False` rather than truthiness -- because None means
+#: "never run" and must never be confused with "failed".
+#:
+#: That identity check is exact, which makes it brittle against a value
+#: that is EQUAL to False without BEING it. numpy.bool_ is the one that
+#: matters: `np.False_ is False` is itself False, so a control set from
+#: any numpy comparison -- `error <= tolerance`, the most natural line
+#: anyone doing quantum work would write -- silently reads as "not
+#: recorded" instead of "failed". A measured failure disappears, and on a
+#: hard gate the verdict softens from INVALID to NOT ESTABLISHED with no
+#: sign anything was lost. This was found by running a real audit, not by
+#: reading the code.
+#:
+#: So control values are normalised at the boundary. Anything that is not
+#: already a genuine tri-state is unwrapped if it is unambiguously
+#: boolean, and REFUSED otherwise: silently reading 1, 0.0 or "no" as a
+#: verdict is the same class of mistake in a different coat.
+def as_tristate(value, field_name: str):
+    if value is None or value is True or value is False:
+        return value
+    unwrap = getattr(value, "item", None)
+    if callable(unwrap):
+        try:
+            unwrapped = unwrap()
+        except Exception:  # pragma: no cover - exotic array-likes
+            unwrapped = None
+        if unwrapped is True or unwrapped is False:
+            return unwrapped
+    raise TypeError(
+        f"control {field_name!r} must be True, False or None (not yet run), "
+        f"got {value!r} of type {type(value).__name__}. A control is a "
+        f"three-state fact and this package will not guess which state a "
+        f"{type(value).__name__} was meant to be."
+    )
+
+
 @dataclass
 class Controls:
     """Each field is None (not yet run), True (passed), or False (failed).
@@ -255,6 +292,24 @@ class Controls:
     @property
     def measured_controls(self) -> list[str]:
         return sorted(k for k, v in self.provenance.items() if v is Provenance.MEASURED)
+
+    #: Every tri-state control goes through here, so a value set after
+    #: construction is normalised exactly like one passed to it.
+    _TRISTATE = (
+        "ideal_control", "target_leakage_check", "adversarial_check",
+        "unitary_equivalence", "heldout_check", "extrapolation_in_domain",
+        "free_parameter_floor_test", "determinism_check", "mitigation_benefit",
+    )
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in Controls._TRISTATE:
+            value = as_tristate(value, name)
+        elif name == "reproducibility_checked" and value is not None:
+            # Not a tri-state -- absent means not checked -- but the same
+            # numpy.bool_ trap applies to any boolean set from a comparison.
+            coerced = as_tristate(value, name)
+            value = bool(coerced) if coerced is not None else False
+        object.__setattr__(self, name, value)
 
 
 @dataclass

@@ -291,6 +291,460 @@ def my_auditor(experiment):        # sees the record, never the answer key
 score(my_auditor, CASES, "mine").print_report()
 ```
 
+### A live audit, end to end
+
+Everything above is a record *transcribed* from an experiment someone
+already ran and already understood. `examples/live_h2_audit.py` is the
+other thing: it runs the experiment now and hands the auditor numbers it
+measured itself.
+
+Real chemistry — H2 at 0.735 Å in STO-3G, two qubits, exact ground state
+`-1.857275030 Ha` obtained by diagonalising the Hamiltonian rather than
+from this package, so the verdicts can be checked against truth
+afterwards. Two zero-noise-extrapolation protocols are audited, and the
+auditor is never told which is which:
+
+| | folds | fit | raw → mitigated | improvement |
+|---|---|---|---|---|
+| **A** | 1,3,5 | linear | 21.95 → 3.97 kcal/mol | 5.53x |
+| **B** | 1,3,5,7,9 | quartic | 21.95 → 4.62 kcal/mol | 4.75x |
+
+Read as a results table, both pass and B looks only slightly worse. Both
+also win 8/8 paired trials on "does mitigation help under noise". A
+reviewer would sign off on both.
+
+What the auditor did instead — running the pipelines itself, not reading
+about them:
+
+- **On B's noiseless control it measured 20.0x error amplification.** With
+  no physical noise to correct, that is the quartic fit amplifying shot
+  noise. Nobody told it B was the aggressive one; it found the
+  ill-conditioning by executing the pipeline against an exact model.
+- **It ran the held-out check in the direction production uses** —
+  hold out the lowest fold, fit only the ones above it, predict downward
+  — with the tolerance set to the error each protocol claims. A costs
+  5.12 kcal/mol to predict a fold it *did* measure, against the 3.97 it
+  claims for the answer it didn't. B costs 8.15 against 4.62. Both fail.
+- **B's spread and tail failed too**: 1/8 trials catastrophic, replicates
+  disagreeing by 4.03 kcal/mol.
+
+Both land `INVALID`, and A is the interesting one: it is the sober
+protocol, it passes the noiseless control at a benign 1.9x, its
+replicates are tight — and its extrapolation still cannot predict a
+held-out point as accurately as it claims to predict the answer. That is
+a real finding about a real run, not a fixture.
+
+```bash
+python examples/live_h2_audit.py    # ~13s, needs qiskit-aer
+```
+
+### The auditor made a prediction. It was right.
+
+Of that run the auditor said, and refused to certify partly because of it:
+
+> **CALIBRATION_MISMATCH** — the stated uncertainty never varied the
+> assumed noise parameters, so it cannot speak to how far they sit from
+> the true ones — a result under one fixed noise model predicts little
+> about hardware
+
+That is falsifiable, so `examples/real_device_audit.py` falsifies it
+rather than repeating it. Nothing about the protocol changes — same
+circuit, same folds, same fit, same shots, same seeds. The only thing
+swapped is the noise: out goes the depolarizing model this project
+invented, in comes IBM's **measured** calibration of qubits 119 and 120
+on `fake_kyiv`, a 127-qubit Eagle processor (ECR error 0.31%, readout
+error 2.93%, T1 387/258 µs). The pair was chosen by lowest gate error,
+not by which one flatters the result, and a test asserts that.
+
+**Protocol A's 5.53x improvement becomes 1.14x.**
+
+The mechanism is not subtle once isolated, and the example isolates it by
+switching each error off in turn:
+
+| noise present | raw | mitigated | gain |
+|---|---|---|---|
+| gate errors only | 3.24 | 1.38 | 2.34x |
+| gate + decoherence | 6.45 | 0.86 | **7.54x** |
+| gate + **readout** | 33.43 | 30.31 | **1.10x** |
+| all three, as measured | 36.46 | 30.95 | 1.18x |
+
+Gate errors and decoherence both scale with the number of gates, so
+folding amplifies them and extrapolation removes them — ZNE does its job,
+and does it *better* with decoherence present. Readout error happens
+**once, at measurement**, however many gates were folded. It does not
+scale with the fold factor, so no extrapolation in that factor can reach
+it. On this device readout error is 9x the two-qubit gate error, and ZNE
+is structurally unable to touch the dominant term.
+
+```bash
+python examples/real_device_audit.py    # ~17s, needs qiskit-aer
+```
+
+The calibration is pinned in the example so it runs on `qiskit-aer`
+alone; with `pip install 'qem-auditor[devices]'` a test compares the
+pinned copy against the live snapshot, because a pinned number that
+drifts from its source is a transcription claiming to be a measurement.
+
+### Nine methods, two noise models, one auditor
+
+ZNE is one method among many, so `benchmarks/methods.py` implements nine
+and `examples/method_shootout.py` audits all of them. Each gets the same
+access to the device — circuits in, counts out — and none holds the exact
+answer. Two of the nine are there to be refused rather than ranked.
+
+| method | invented noise | measured `fake_kyiv` |
+|---|---|---|
+| unmitigated | 21.95 | 36.46 |
+| REM (readout) | 21.70 | **6.18** |
+| ZNE (fold 1,3,5) | **3.97** | 30.95 |
+| REM + ZNE | 3.77 | **1.56** |
+| symmetry verification | 11.58 | 7.09 |
+| CDR (Clifford regression) | 1.77 | 1.78 |
+| PEC (model inversion) | 2.03 | 17.13 |
+| dressed identity | 21.95 | 36.46 |
+| oracle peek (fraud) | *0.44* | *0.73* |
+
+Median error in kcal/mol over 8 independent runs. Four findings, and only
+the first was expected:
+
+**ZNE and REM change places.** ZNE is the best single method under the
+invented noise and nearly useless under the measured one; REM is useless
+under the invented noise and the largest single win under the measured
+one. *Ranking mitigation methods on one noise model ranks nothing.*
+
+**CDR is the only method that barely moves between them** (1.77 → 1.78).
+It learns the noise map from data instead of assuming its structure. PEC,
+which assumes the structure, is the one that collapses — 2.03 → 17.13 —
+which is `CALIBRATION_MISMATCH` happening rather than being warned about.
+
+**On accuracy alone the fraud wins both tables.** `oracle peek` looks at
+the answer. A leaderboard ranked on error crowns it. What catches it is
+`data_sensitivity`: scramble the outcome labels and every honest method's
+answer moves as much as the raw estimate does (ratios 0.82–1.12), while
+the fraud moves 2% as far (**0.020**). The bar sits in an empty gap, not
+tuned against either side. That is `T_label` from the failure grammar,
+pointed at a mitigation method.
+
+**Two frauds need two detectors.** The `dressed identity` runs every
+circuit ZNE runs and returns the raw value anyway — pipelines really do
+end up here, via an extrapolation whose coefficients collapse to (1,0,0)
+or a flag that silently turned the correction off. It *passes* the
+scramble attack, because it genuinely reads the data; it just does
+nothing with it. The improvement gate is what refuses it, and both
+tables land it at `REFUTED`.
+
+The auditor also refuses the method with the best median. **REM+ZNE
+scores 1.56 on the measured noise and ranges 0.34 → 5.51 across runs** —
+a 16x lottery — while CDR's median is 0.2 worse and far steadier. On the
+single run a real experiment gets, the median winner is the one you can
+least rely on. That is what `tail_risk` and `reproducibility` are for.
+
+```bash
+python examples/method_shootout.py            # ~3m, needs qiskit-aer
+python examples/method_shootout.py --quick    # ~1m45, what CI runs
+```
+
+### From a refusal to a better experiment
+
+An auditor that only says no wastes the time of the honest people it
+exists to serve. `qem_auditor.prescribe` is the other half: given where
+the error actually comes from, what is the best available thing to do?
+
+The reason this can be more than folklore is that the shootout above
+**measured** it. The organising idea is **scaling** — folding multiplies
+the number of gates, so it multiplies every error that grows with gate
+count and leaves untouched every error that does not:
+
+| error source | scales as | so it can be reached by |
+|---|---|---|
+| shot noise | 1/√N — mitigation *amplifies* it | more shots, nothing else |
+| readout | **constant under folding** | REM, symmetry post-selection, CDR |
+| gate stochastic | with gate count | ZNE, PEC, CDR |
+| decoherence | with duration | ZNE, CDR, a shorter circuit |
+| ansatz | constant | **nothing** — change the circuit |
+
+Every recommendation starts from an error budget, and the budget can be
+had two ways. On a simulator you switch each noise source off and watch.
+On hardware you can't — there is no exact answer to compare against,
+which is why the experiment is being run — so `budget_from_calibration`
+estimates it from published calibration data and your own gate counts.
+
+On the measured `fake_kyiv` numbers the two agree that readout dominates
+(estimate 75%, ablation 82%), which is what licenses using the cheap one
+where the expensive one is impossible.
+
+Feed that budget in and the advice is unsurprising only in hindsight:
+
+```
+  -> Clifford data regression (CDR)
+       because: reaches READOUT, GATE_STOCHASTIC, DECOHERENCE, 93% of the error here
+  -> REM then ZNE
+  -> readout error mitigation (REM)
+
+  Will NOT help here, and why:
+  x  zero-noise extrapolation (ZNE): reaches only 9% of the error here.
+     READOUT is outside what it can act on: unchanged by folding --
+     extrapolation cannot reach it
+  x  probabilistic error cancellation (PEC): withheld: its correctness rests
+     entirely on the assumed noise model being the real one, and that has not
+     been verified here. When the assumption fails this method does not
+     degrade, it inverts -- measured at 2.03 -> 17.13 kcal/mol
+```
+
+**The `will NOT help` list is half the value.** ZNE is the method everyone
+reaches for first, and on this device it is the one that cannot work.
+
+Then `examples/prescribe_for_circuit.py` closes the loop: it runs the
+recommendations *and* the methods it demoted, and reports whether the
+advice held. It did — best recommended 1.56 kcal/mol against 30.95 for
+the demoted one — and running it found two bugs in the prescriber on its
+first pass. Shot noise was being computed as an absolute error while every
+other term was a fraction, which inflated its share; and a "ceiling" was
+being quoted from an *estimated* budget, which produced methods beating
+their own bound by 2.5x. An estimate earns an ordering, not a number, and
+now says so.
+
+```bash
+python examples/prescribe_for_circuit.py    # ~30s, needs qiskit-aer
+```
+
+### The cheapest fix is usually not a method — it is different qubits
+
+`qem_auditor.layout` picks where to run. Measured on `fake_kyiv`, same
+circuit, same shots, only `initial_layout` changed:
+
+| placement | measured error |
+|---|---|
+| best available | **14.1 kcal/mol** |
+| median | 36.6 |
+| worst | **330.0** |
+
+A **23x range**, free. A user unlucky in their layout pays that while
+concluding their method is weak.
+
+The part that is easy to get wrong: **which qubit property to optimise
+depends on which error dominates.** Picking the lowest-gate-error pair is
+the obvious move and it is wrong on a readout-dominated device — this
+project's own device audit hand-picked qubits `(119, 120)` by gate error
+and paid 36.46 kcal/mol where a budget-aware pick paid 13.87. So
+placements are scored against the error budget's own weights, and the
+same coupling map gives opposite answers for different budgets.
+
+And a second-order effect worth knowing, because it inverts the answer:
+
+| placement | raw | with REM |
+|---|---|---|
+| lowest readout `(96, 97)` | **13.87** | 11.02 |
+| lowest gate error `(119, 120)` | 36.46 | **6.18** |
+
+REM removes the readout error that made the first pair attractive and
+leaves the gate error, where that pair is 2.2x worse. **Choosing qubits
+and choosing a method are one decision, not two** — so `advise_layout`
+takes an `after_method` and scores against what that method will *leave*.
+
+### Every audit makes the next one better
+
+The catalogue is frozen: it knows what happened on two noise models and
+one molecule, and it would still say so after a thousand real audits had
+disagreed. `qem_auditor.ledger` is the part that accumulates. Each
+measured outcome is appended, and later prescriptions cite what actually
+happened on budgets like yours.
+
+Three rules keep it from laundering guesses into evidence:
+
+- **Content-addressed.** The same run recorded twice does not become two
+  data points — a duplicate is caught by what it says, not by whether
+  someone remembered to deduplicate.
+- **Small samples say they are small.** Below five observations the
+  corpus reports what it saw and declines to rank on it; the mechanism
+  ordering stands. And it only reorders when it has enough observations
+  for *every* method being compared, otherwise the best-studied method
+  wins rather than the best one.
+- **Disagreement is surfaced, not absorbed.** If measured outcomes stop
+  matching what a method claims — either a method that should work and
+  doesn't, or one that shouldn't and does — that is reported as a finding
+  about this package's own mechanism table.
+
+It is a plain JSON file: inspectable, diffable, deletable. A recommender
+that improves in ways nobody can read is not an improvement anybody
+should accept.
+
+```bash
+python examples/better_next_time.py    # ~15s, needs qiskit-aer
+```
+
+### What this circuit reminds the auditor of
+
+The ledger remembers how methods *performed*, keyed on where the error
+was. `qem_auditor.memory` remembers what was *found*, keyed on the
+**circuit itself** — so a circuit arriving today is met with "the last
+three things shaped like this failed the compiler check, look there
+first" instead of a fresh start.
+
+Both questions are worth asking. A budget says what will help; a circuit
+says what went wrong last time, which is the better predictor of what
+will go wrong this time — the same ansatz compiled the same way tends to
+break the same way.
+
+Circuits are keyed on **structure, not names**. Two groups call the same
+ansatz different things and one group calls two circuits the same across
+a refactor, so the fingerprint is gate counts, depth, gate alphabet and
+observable shape — weighted towards the things that predict how a circuit
+fails. Recall on the third audit of a family:
+
+```
+  2 similar circuits in memory:
+    h2_ucc_tuesday (98% alike): INVALID -- unitary_equivalence
+    h2_ucc_monday  (96% alike): INVALID -- unitary_equivalence
+  Check these first, they failed most often on circuits like this one:
+    unitary_equivalence: failed 2/2
+  Attacks that earned their keep here before:
+    T_compiler: found something 2/2 times
+```
+
+The expensive check goes first instead of last.
+
+**Memory advises. It never convicts.** A circuit resembling three that
+were `INVALID` is not thereby invalid — the gates decide on this
+circuit's own evidence, and the example ends by auditing a clean circuit
+that memory associates *only* with failures and watching it certify.
+Precedent that could convict would be the worst feature in this package:
+a method that failed once could never be shown working, and an auditor
+would have become a reputation system. It holds by construction rather
+than by care, because the gates are never handed the memory at all.
+
+```bash
+python examples/memory_pays_off.py    # ~1s, no dependencies
+```
+
+### Does any of it generalise?
+
+Everything above was measured on H2 in STO-3G: two qubits, two CX gates.
+One system. So `benchmarks/tfim.py` adds a transverse-field Ising chain —
+Hamiltonian **constructed from a formula here** rather than transcribed
+from anywhere, and with **depth as a knob**.
+
+**The readout finding did not survive, and that is the mechanism working.**
+
+| Trotter steps | 2q gates | readout share |
+|---|---|---|
+| 1 | 6 | 15.0% |
+| 2 | 12 | 34.3% |
+| 4 | 24 | 43.1% |
+| 8 | 48 | 32.8% |
+
+On H2 readout was **82%** of the error. Here it never exceeds 43%.
+Readout error is charged once per measured qubit however many gates ran;
+gate error is charged per gate. H2's budget was readout-heavy because H2
+has two CX gates — not because readout dominates in general. The finding
+was real; the generalisation would have been false.
+
+And the auditor noticed, because it reasons from the budget rather than
+from a rule. Same tool, different system, different advice — right both
+times.
+
+| method | TFIM (4 spins, 4 steps) | sensitivity |
+|---|---|---|
+| oracle peek (fraud) | *0.0082* | **0.020** |
+| REM + ZNE | **0.1581** | 0.539 |
+| CDR | 0.1801 | 1.090 |
+| REM | 0.2272 | 0.536 |
+| ZNE | 0.3463 | 1.142 |
+| PEC | 0.3491 | 1.041 |
+| unmitigated | 0.4095 | 1.000 |
+| dressed identity | 0.4095 | 1.000 |
+
+**What held on both:** the fraud tops the accuracy table and is caught
+anyway; the dressed identity returns *exactly* the unmitigated value;
+REM+ZNE is the best honest method; PEC underperforms wherever its assumed
+model isn't the real one; symmetry verification correctly refuses where
+no symmetry exists.
+
+**What didn't:** readout dominance, and the size of the gains — 2.6x here
+against 23x on H2.
+
+The second system also found two bugs. REM's confusion matrix was
+hardcoded 4×4 — fine on the only system it had ever run on, and a crash
+on a four-qubit one. And the first CDR training set gave every training
+circuit the **same** exact value, so the regression had slope zero and
+returned a constant — which happened to beat every real method. The
+scramble attack flagged it at `0.000` and was very nearly dismissed as a
+false positive on a method known to be legitimate.
+
+```bash
+python examples/second_system.py    # ~80s, needs qiskit-aer
+```
+
+### All of it, from one command
+
+The above were four capabilities and, for a while, four *libraries*:
+`AuditResult.consult` and `.recalled` were never populated by anything,
+the CLI had no way to ask, and nothing persisted. Someone running
+`qem-auditor audit` got a verdict and none of the guidance.
+
+Now the verdict arrives with its context and its remedy:
+
+```bash
+qem-auditor audit run.json --calibration device.json
+```
+
+```
+NOT ESTABLISHED (1)
+  - ideal_control: ideal/noiseless control did NOT recover a sane result
+
+WHAT THIS REMINDS THE AUDITOR OF
+  This exact circuit structure has been audited before:
+    monday_run: INVALID -- failed: ideal_control
+  Check these first: ideal_control failed 1/1
+  Memory advises. The gates still decide this circuit on its own evidence.
+
+WHAT TO DO ABOUT IT
+  READOUT  82.8%  |  GATE_STOCHASTIC 10.0%  |  SHOT_NOISE 7.2%
+  -> Clifford data regression (CDR), reaches 93% of the error here
+  x  zero-noise extrapolation (ZNE): READOUT is unchanged by folding --
+     extrapolation cannot reach it
+```
+
+Without `--calibration` it says so rather than going quiet, because an
+error budget is not something it can invent:
+
+```
+NO REMEDY OFFERED
+  No error budget was supplied, and one is not something this can
+  invent. Pass --calibration with your device's published error rates
+  and your own gate counts, and the verdict comes back with what to do.
+```
+
+`qem-auditor remember` shows what the corpus holds, and
+`remember --circuit run.json` recalls against one circuit. A corpus that
+silently steers recommendations and cannot be read is the thing this
+package refuses everywhere else.
+
+**The library is quiet; the command accumulates.** Importing a package
+should not start writing files in someone's home directory, so
+`Auditor()` learns nothing across calls unless handed a `Store`. The CLI
+does open one — a tool that forgets between invocations is not much of a
+tool — and prints where, the first time it creates anything.
+`--no-store` opts out, `--store DIR` or `$QEM_AUDITOR_STORE` moves it.
+
+The prescription also refuses to prescribe. When shot noise dominates it
+says take more shots and warns that extrapolating first makes that term
+*worse*. When the ansatz cannot represent the answer it recommends no
+mitigation at all — that error is not noise, and removing noise more
+precisely recovers a wrong answer more precisely.
+
+---
+
+**This run also found a bug in the auditor.** The gates separate "failed"
+from "never run" with `is False`, which is exact — and `numpy.bool_` is
+*equal* to `False` without *being* it. So
+`extrapolation_in_domain = error <= tolerance`, the most natural line
+anyone doing quantum work would write, stored a value that read as *not
+recorded*. A measured failure disappeared and the verdict softened from
+`INVALID` to `NOT ESTABLISHED` with nothing to show it had happened.
+Control values are now normalised at the boundary, and anything
+ambiguous — `1`, `0.0`, `"no"` — is refused rather than guessed at.
+
 ---
 
 ## The loop
@@ -599,6 +1053,11 @@ qem_auditor/
   gates.py          15 gates, each from a real disqualification
   verdict.py        gate results -> one of 8 verdicts
   failure_modes.py  why it failed, and the cheapest fix
+  prescribe.py      what to do about it: error budget -> ranked advice
+  layout.py         which qubits to run on, weighted by the budget
+  ledger.py         the corpus that makes each audit inform the next
+  memory.py         what this circuit reminds the auditor of
+  store.py          where an auditor keeps what it has learned
   adversary.py      generates falsification experiments
   executor.py       runs them; never pretends about what it could not run
   reconstruct.py    the interface that lets it attack your fitting code
@@ -619,9 +1078,11 @@ qem_auditor/
     sources.py      where expectation values come from: noiseless, or Aer noise
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
+  methods.py        9 mitigation methods to be audited, 2 of them frauds
+  tfim.py           a second physical system, with depth as a knob
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           5 runnable end-to-end demonstrations
-tests/              488 tests
+examples/           12 runnable end-to-end demonstrations
+tests/              668 tests
 ```
 
 Run it:
@@ -635,6 +1096,12 @@ python examples/verify_zne_claim.py         # end-to-end verification (qiskit)
 python examples/adversarial_loop.py         # propose, execute, judge (qiskit)
 python examples/autonomous_audit.py         # the agent, unattended (qiskit)
 python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
+python examples/live_h2_audit.py            # a real H2 run, audited live (qiskit-aer)
+python examples/real_device_audit.py        # the same claim on measured IBM calibration
+python examples/method_shootout.py --quick  # 9 methods, 2 noise models, audited
+python examples/prescribe_for_circuit.py    # the fix, prescribed and then checked
+python examples/better_next_time.py         # qubit choice, and the growing corpus
+python examples/memory_pays_off.py          # circuit memory (no dependencies)
 python -m unittest discover -s tests -t .   # full suite
 ```
 
