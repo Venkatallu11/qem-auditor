@@ -550,6 +550,14 @@ leaves the gate error, where that pair is 2.2x worse. **Choosing qubits
 and choosing a method are one decision, not two** — so `advise_layout`
 takes an `after_method` and scores against what that method will *leave*.
 
+The search is exhaustive and says so. On the 127-qubit `fake_kyiv`
+lattice it enumerates every connected placement — 144 pairs, 7,104
+ten-qubit sets — in under a fifth of a second, and at twelve qubits it
+**refuses** rather than return a truncated best-of, because a search that
+quietly stopped looking would be claiming an optimum it never found.
+Pass `candidates=` to narrow to a region; the answer is then exhaustive
+over the region you named, and the report says which region that was.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
