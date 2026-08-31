@@ -338,6 +338,55 @@ a real finding about a real run, not a fixture.
 python examples/live_h2_audit.py    # ~13s, needs qiskit-aer
 ```
 
+### The auditor made a prediction. It was right.
+
+Of that run the auditor said, and refused to certify partly because of it:
+
+> **CALIBRATION_MISMATCH** — the stated uncertainty never varied the
+> assumed noise parameters, so it cannot speak to how far they sit from
+> the true ones — a result under one fixed noise model predicts little
+> about hardware
+
+That is falsifiable, so `examples/real_device_audit.py` falsifies it
+rather than repeating it. Nothing about the protocol changes — same
+circuit, same folds, same fit, same shots, same seeds. The only thing
+swapped is the noise: out goes the depolarizing model this project
+invented, in comes IBM's **measured** calibration of qubits 119 and 120
+on `fake_kyiv`, a 127-qubit Eagle processor (ECR error 0.31%, readout
+error 2.93%, T1 387/258 µs). The pair was chosen by lowest gate error,
+not by which one flatters the result, and a test asserts that.
+
+**Protocol A's 5.53x improvement becomes 1.14x.**
+
+The mechanism is not subtle once isolated, and the example isolates it by
+switching each error off in turn:
+
+| noise present | raw | mitigated | gain |
+|---|---|---|---|
+| gate errors only | 3.24 | 1.38 | 2.34x |
+| gate + decoherence | 6.45 | 0.86 | **7.54x** |
+| gate + **readout** | 33.43 | 30.31 | **1.10x** |
+| all three, as measured | 36.46 | 30.95 | 1.18x |
+
+Gate errors and decoherence both scale with the number of gates, so
+folding amplifies them and extrapolation removes them — ZNE does its job,
+and does it *better* with decoherence present. Readout error happens
+**once, at measurement**, however many gates were folded. It does not
+scale with the fold factor, so no extrapolation in that factor can reach
+it. On this device readout error is 9x the two-qubit gate error, and ZNE
+is structurally unable to touch the dominant term.
+
+```bash
+python examples/real_device_audit.py    # ~17s, needs qiskit-aer
+```
+
+The calibration is pinned in the example so it runs on `qiskit-aer`
+alone; with `pip install 'qem-auditor[devices]'` a test compares the
+pinned copy against the live snapshot, because a pinned number that
+drifts from its source is a transcription claiming to be a measurement.
+
+---
+
 **This run also found a bug in the auditor.** The gates separate "failed"
 from "never run" with `is False`, which is exact — and `numpy.bool_` is
 *equal* to `False` without *being* it. So
@@ -677,8 +726,8 @@ qem_auditor/
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           6 runnable end-to-end demonstrations
-tests/              496 tests
+examples/           7 runnable end-to-end demonstrations
+tests/              503 tests
 ```
 
 Run it:
@@ -693,6 +742,7 @@ python examples/adversarial_loop.py         # propose, execute, judge (qiskit)
 python examples/autonomous_audit.py         # the agent, unattended (qiskit)
 python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
 python examples/live_h2_audit.py            # a real H2 run, audited live (qiskit-aer)
+python examples/real_device_audit.py        # the same claim on measured IBM calibration
 python -m unittest discover -s tests -t .   # full suite
 ```
 

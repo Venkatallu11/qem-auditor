@@ -58,7 +58,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[adapters]" qiskit-aer
+      # Devices too, and BEFORE the tests: the drift check that compares
+      # the example's pinned calibration against the fake_kyiv snapshot
+      # skips when it is missing, which would quietly retire the check.
+      - run: pip install -e ".[adapters,devices]" qiskit-aer
       - run: python -m unittest discover -s tests -t . -v
       - run: python examples/verify_zne_claim.py
       - run: python examples/adversarial_loop.py
@@ -69,6 +72,9 @@ jobs:
       # A live end-to-end audit: real molecule, real noise, real mitigation,
       # numbers the auditor measured itself rather than any record on disk.
       - run: python examples/live_h2_audit.py
+      # The same claim under IBM's MEASURED fake_kyiv calibration, which
+      # is where ZNE's improvement collapses.
+      - run: python examples/real_device_audit.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py
