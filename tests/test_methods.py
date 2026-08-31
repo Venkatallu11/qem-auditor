@@ -202,6 +202,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
 class TensoredReadoutMitigationTest(unittest.TestCase):
     """Readout mitigation that survives past six qubits.
 
@@ -256,7 +257,10 @@ class TensoredReadoutMitigationTest(unittest.TestCase):
 
 
 class _WideSampler:
-    """Just wide enough to trip a width guard, with nothing behind it."""
+    """Just wide enough to trip a width guard, with nothing behind it.
+
+    Only ever constructed inside a test that already requires qiskit.
+    """
 
     def __init__(self, n_qubits):
         from qiskit import QuantumCircuit

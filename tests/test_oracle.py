@@ -6,12 +6,19 @@ what the same specification costs when it is actually implemented.
 """
 import unittest
 
-from benchmarks.oracle import (GRID, Cube, build_oracle, cube_cover,
-                               disjoint_rectangles, encode, logo_predicate,
-                               marked_pixels)
+try:
+    from benchmarks.oracle import (GRID, build_oracle, cube_cover,
+                                   disjoint_rectangles, encode, logo_predicate,
+                                   marked_pixels)
+
+    HAVE_QISKIT = True
+except ImportError:  # pragma: no cover - environment dependent
+    HAVE_QISKIT = False
+
 from qem_auditor.reversible import audit_oracle
 
 
+@unittest.skipUnless(HAVE_QISKIT, "needs qiskit to build the circuit")
 class SpecificationTest(unittest.TestCase):
 
     def test_the_four_shapes_make_the_pixel_count_the_qmod_claimed(self):
@@ -47,6 +54,7 @@ class SpecificationTest(unittest.TestCase):
                 self.assertEqual(selected, cube.contains(*divmod(value, GRID)))
 
 
+@unittest.skipUnless(HAVE_QISKIT, "needs qiskit to build the circuit")
 class ReferenceOracleTest(unittest.TestCase):
 
     def test_it_implements_its_specification_on_every_input(self):
