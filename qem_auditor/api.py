@@ -38,6 +38,7 @@ from .power import PowerAnalysis, analyze_experiment
 from .claim import CompiledClaim, compile_claim
 from .failure_modes import FailureAnalysis, classify
 from .planner import CandidateExperiment, candidates_from_audit, next_experiment
+from .prescribe import Consult
 from .schema import Experiment, FailureMode
 from .verdict import AuditReport, Verdict, audit as _audit
 
@@ -58,6 +59,15 @@ class AuditResult:
     """(control, why) the auditor structurally cannot establish from the
     artifacts it was given. Distinguishes 'your method failed this' from
     'nobody could check this from a circuit alone'."""
+
+    consult: Optional[Consult] = None
+    """What to do about it, when an error budget was supplied.
+
+    A verdict without this is half an answer: the person who brought the
+    circuit learns their afternoon was wasted and nothing about what
+    would not have wasted it. It is optional rather than always-on
+    because it needs a budget, and inventing one to have something to say
+    would be worse than saying nothing."""
 
     @property
     def verdict(self) -> Verdict:
@@ -95,6 +105,8 @@ class AuditResult:
             parts.append(f"\nUNTESTED ATTACK SURFACE ({len(self.attacks.attacks)}):")
             for a in self.attacks.attacks:
                 parts.append(f"  {a.attack_id}: {a.prediction.statistic}")
+        if self.consult is not None:
+            parts.append("\n" + self.consult.format_consult())
         if self.measurements:
             parts.append("\nEXECUTED BY THE AUDITOR:")
             for m in self.measurements:
@@ -107,6 +119,8 @@ class AuditResult:
         if self.analysis.diagnoses:
             self.analysis.print_analysis()
         self.claim.print_claim()
+        if self.consult is not None:
+            self.consult.print_consult()
 
 
 class Auditor:

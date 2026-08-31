@@ -78,6 +78,9 @@ jobs:
       # Nine methods, two noise models, one auditor. --quick halves the
       # runs; the findings it checks hold at either size.
       - run: python examples/method_shootout.py --quick
+      # The other half of the loop: estimate the budget from calibration,
+      # prescribe from it, then RUN the advice and check it held.
+      - run: python examples/prescribe_for_circuit.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

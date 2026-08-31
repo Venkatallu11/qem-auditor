@@ -444,6 +444,76 @@ python examples/method_shootout.py            # ~3m, needs qiskit-aer
 python examples/method_shootout.py --quick    # ~1m45, what CI runs
 ```
 
+### From a refusal to a better experiment
+
+An auditor that only says no wastes the time of the honest people it
+exists to serve. `qem_auditor.prescribe` is the other half: given where
+the error actually comes from, what is the best available thing to do?
+
+The reason this can be more than folklore is that the shootout above
+**measured** it. The organising idea is **scaling** — folding multiplies
+the number of gates, so it multiplies every error that grows with gate
+count and leaves untouched every error that does not:
+
+| error source | scales as | so it can be reached by |
+|---|---|---|
+| shot noise | 1/√N — mitigation *amplifies* it | more shots, nothing else |
+| readout | **constant under folding** | REM, symmetry post-selection, CDR |
+| gate stochastic | with gate count | ZNE, PEC, CDR |
+| decoherence | with duration | ZNE, CDR, a shorter circuit |
+| ansatz | constant | **nothing** — change the circuit |
+
+Every recommendation starts from an error budget, and the budget can be
+had two ways. On a simulator you switch each noise source off and watch.
+On hardware you can't — there is no exact answer to compare against,
+which is why the experiment is being run — so `budget_from_calibration`
+estimates it from published calibration data and your own gate counts.
+
+On the measured `fake_kyiv` numbers the two agree that readout dominates
+(estimate 75%, ablation 82%), which is what licenses using the cheap one
+where the expensive one is impossible.
+
+Feed that budget in and the advice is unsurprising only in hindsight:
+
+```
+  -> Clifford data regression (CDR)
+       because: reaches READOUT, GATE_STOCHASTIC, DECOHERENCE, 93% of the error here
+  -> REM then ZNE
+  -> readout error mitigation (REM)
+
+  Will NOT help here, and why:
+  x  zero-noise extrapolation (ZNE): reaches only 9% of the error here.
+     READOUT is outside what it can act on: unchanged by folding --
+     extrapolation cannot reach it
+  x  probabilistic error cancellation (PEC): withheld: its correctness rests
+     entirely on the assumed noise model being the real one, and that has not
+     been verified here. When the assumption fails this method does not
+     degrade, it inverts -- measured at 2.03 -> 17.13 kcal/mol
+```
+
+**The `will NOT help` list is half the value.** ZNE is the method everyone
+reaches for first, and on this device it is the one that cannot work.
+
+Then `examples/prescribe_for_circuit.py` closes the loop: it runs the
+recommendations *and* the methods it demoted, and reports whether the
+advice held. It did — best recommended 1.56 kcal/mol against 30.95 for
+the demoted one — and running it found two bugs in the prescriber on its
+first pass. Shot noise was being computed as an absolute error while every
+other term was a fraction, which inflated its share; and a "ceiling" was
+being quoted from an *estimated* budget, which produced methods beating
+their own bound by 2.5x. An estimate earns an ordering, not a number, and
+now says so.
+
+```bash
+python examples/prescribe_for_circuit.py    # ~30s, needs qiskit-aer
+```
+
+The prescription also refuses to prescribe. When shot noise dominates it
+says take more shots and warns that extrapolating first makes that term
+*worse*. When the ansatz cannot represent the answer it recommends no
+mitigation at all — that error is not noise, and removing noise more
+precisely recovers a wrong answer more precisely.
+
 ---
 
 **This run also found a bug in the auditor.** The gates separate "failed"
@@ -764,6 +834,7 @@ qem_auditor/
   gates.py          15 gates, each from a real disqualification
   verdict.py        gate results -> one of 8 verdicts
   failure_modes.py  why it failed, and the cheapest fix
+  prescribe.py      what to do about it: error budget -> ranked advice
   adversary.py      generates falsification experiments
   executor.py       runs them; never pretends about what it could not run
   reconstruct.py    the interface that lets it attack your fitting code
@@ -786,8 +857,8 @@ benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   methods.py        9 mitigation methods to be audited, 2 of them frauds
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           8 runnable end-to-end demonstrations
-tests/              518 tests
+examples/           9 runnable end-to-end demonstrations
+tests/              550 tests
 ```
 
 Run it:
@@ -804,6 +875,7 @@ python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
 python examples/live_h2_audit.py            # a real H2 run, audited live (qiskit-aer)
 python examples/real_device_audit.py        # the same claim on measured IBM calibration
 python examples/method_shootout.py --quick  # 9 methods, 2 noise models, audited
+python examples/prescribe_for_circuit.py    # the fix, prescribed and then checked
 python -m unittest discover -s tests -t .   # full suite
 ```
 
