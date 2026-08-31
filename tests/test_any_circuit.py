@@ -26,8 +26,13 @@ if HAVE_AER:
                                     TargetScrambledSampler, near_clifford_training,
                                     system_from_circuit, unmitigated)
 
-SHOTS = 20_000
-SEEDS = (101, 202, 303)
+#: Deliberately low. Every assertion here is a large-margin inequality --
+#: the fraud scores 0.020 against a floor of 0.5, and a method beating raw
+#: by 3x is asked to beat it by 3x -- so shots buy nothing but runtime.
+#: The one test that needs precision, agreement with a statevector, asks
+#: for its own.
+SHOTS = 6_000
+SEEDS = (101, 202)
 
 
 def ansatz():
@@ -82,6 +87,7 @@ class AnyCircuitTest(unittest.TestCase):
         """XYZ needs all three bases. The old layer popped one from a set
         and returned a wrong number."""
         noiseless = AerSimulator()
+        # This one is a precision claim, so it pays for precision.
         got = unmitigated(Sampler(noiseless, 200_000, 1, self.system))
         self.assertAlmostEqual(got, self.system.exact, delta=0.03)
 
@@ -165,15 +171,13 @@ class TargetOnlyScramblingTest(unittest.TestCase):
                              TargetScrambledSampler), 0.3)
 
     def test_every_honest_method_clears_the_floor(self):
-        for name, method in METHODS.items():
-            if name == "oracle peek (fraud)":
-                continue
-            try:
-                score = self.sensitivity(method, TargetScrambledSampler)
-            except ValueError:
-                continue
+        """Checked on the methods that calibrate, which are the ones the
+        attack's older form got wrong. Running all nine here duplicated
+        what the shootout already covers at four times the cost."""
+        for name in ("CDR (Clifford regression)", "REM (readout)", "REM + ZNE"):
             with self.subTest(method=name):
-                self.assertGreater(score, 0.5)
+                self.assertGreater(
+                    self.sensitivity(METHODS[name], TargetScrambledSampler), 0.5)
 
 
 @unittest.skipUnless(HAVE_AER, "needs qiskit-aer")

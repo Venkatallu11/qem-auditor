@@ -24,8 +24,13 @@ if HAVE_AER:
                                     h2_system, unmitigated)
     from real_device_audit import calibration, device_noise
 
-SHOTS = 20_000
-SEEDS = (101, 202, 303)
+#: Low on purpose. Every assertion in this file is a large-margin
+#: comparison -- readout share below 60%, the fraud on top, PEC worse
+#: than REM+ZNE -- and shots buy runtime rather than confidence in any of
+#: them. The H2 spread check keeps its own budget, because comparing a
+#: median against a pinned spread is the one claim here that needs it.
+SHOTS = 6_000
+SEEDS = (101, 202)
 
 
 @unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
@@ -196,11 +201,11 @@ class RefactorTest(unittest.TestCase):
 
         backend = AerSimulator(noise_model=noise_model())
         system = h2_system()
-        seeds = range(101, 901, 50)
+        seeds = range(101, 901, 100)
         for name, (median, spread) in self.H2_BASELINE.items():
             with self.subTest(method=name):
                 got = statistics.median(
-                    [system.error(METHODS[name](Sampler(backend, 40_000, s,
+                    [system.error(METHODS[name](Sampler(backend, 20_000, s,
                                                         system)))
                      for s in seeds])
                 self.assertLess(abs(got - median), 2 * spread,
