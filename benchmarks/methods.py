@@ -22,8 +22,9 @@ can REFUSE, which is the harder and more useful property.
 """
 from __future__ import annotations
 
-import itertools
 import statistics
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import numpy as np
 from qiskit import QuantumCircuit, transpile
@@ -96,10 +97,17 @@ def basis_counts(circuit: QuantumCircuit, backend, shots: int, seed: int) -> dic
     }
 
 
-def energy_from_counts(counts: dict) -> float:
-    """<H> from Z-basis and X-basis counts."""
+def energy_from_counts(counts: dict, operator=None) -> float:
+    """<O> from Z-basis and X-basis counts.
+
+    Every term must be single-basis: an operator mixing X and Z on
+    different qubits within one term needs more measurement circuits than
+    this collects, and silently averaging it would be wrong rather than
+    approximate.
+    """
+    operator = H2 if operator is None else operator
     total = 0.0
-    for label, coeff in zip(H2.paulis.to_labels(), H2.coeffs):
+    for label, coeff in zip(operator.paulis.to_labels(), operator.coeffs):
         qubits = [len(label) - 1 - i for i, c in enumerate(label) if c != "I"]
         bases = {c for c in label if c != "I"}
         if not bases:
@@ -123,6 +131,53 @@ def error_kcal(energy: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# What a method is run against
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class System:
+    """A circuit, an observable, and the answer nobody gets to see.
+
+    Introduced when the findings needed a second physical system. Every
+    method below was written against H2 and read `ansatz()` and the H2
+    Hamiltonian directly, which made "does this generalise?" unanswerable
+    without duplicating all nine. They now take the system from the
+    sampler, so the same code runs on anything.
+
+    `clifford_variants` is how CDR gets training circuits whose exact
+    answer is classically computable. It is system-specific -- for a
+    variational ansatz it is the angles at which the circuit becomes
+    Clifford -- so the system supplies them rather than the method
+    guessing.
+
+    `physical_z_strings` declares a symmetry checkable in the Z basis, or
+    None when the state has none. None is the honest default: most states
+    do not, and a post-selection filter without a symmetry behind it is
+    just discarding data that disagrees.
+    """
+
+    name: str
+    circuit: Any
+    observable: Any
+    exact: float
+    unit_scale: float = 1.0
+    clifford_variants: tuple = ()
+    physical_z_strings: Optional[tuple] = None
+
+    def error(self, value: float) -> float:
+        """Distance from the truth, in the system's own reported unit."""
+        return float(abs(float(value) - self.exact) * self.unit_scale)
+
+
+def h2_system() -> System:
+    return System(
+        name="H2/STO-3G", circuit=ansatz(), observable=H2, exact=FCI,
+        unit_scale=HARTREE_TO_KCAL,
+        clifford_variants=tuple((ansatz(a), _exact_energy(a))
+                                for a in CLIFFORD_ANGLES),
+        physical_z_strings=PHYSICAL_Z_STRINGS)
+
+
+# ---------------------------------------------------------------------------
 # The sampler a method is handed
 # ---------------------------------------------------------------------------
 class Sampler:
@@ -135,12 +190,21 @@ class Sampler:
     function of the data.
     """
 
-    def __init__(self, backend, shots: int, seed: int) -> None:
+    def __init__(self, backend, shots: int, seed: int,
+                 system: "System" = None) -> None:
         self.backend = backend
         self.shots = shots
         self.seed = seed
+        self.system = system if system is not None else h2_system()
         self.circuits_run = 0
         self.shots_used = 0
+
+    def energy(self, tables: dict) -> float:
+        return energy_from_counts(tables, self.system.observable)
+
+    @property
+    def circuit(self):
+        return self.system.circuit
 
     def __call__(self, circuit: QuantumCircuit, shots: int = None,
                  seed_offset: int = 0) -> dict:
@@ -176,18 +240,43 @@ class ScrambledSampler(Sampler):
 # ---------------------------------------------------------------------------
 def unmitigated(sampler: Sampler) -> float:
     """The baseline every other method has to beat."""
-    return energy_from_counts(sampler(ansatz()))
+    return sampler.energy(sampler(sampler.circuit))
+
+
+#: Full readout calibration needs one circuit per basis state, so its
+#: cost is 2**n. Beyond this it is refused rather than run: an honest
+#: implementation of a method nobody would use at that size is worse than
+#: saying so, and the tensored and M3 approximations that real work uses
+#: at scale are a different method with different assumptions, not this
+#: one made faster.
+MAX_REM_QUBITS = 6
 
 
 def _confusion_matrix(sampler: Sampler, shots: int) -> np.ndarray:
-    """Measured readout confusion, from the four preparation circuits.
+    """Measured readout confusion, from one preparation circuit per basis
+    state.
 
     M[measured, prepared]. Paid for out of the method's own shot budget,
-    which is why REM is not free.
+    which is why REM is not free -- and the number of those circuits is
+    2**n, which is why it does not stay affordable.
+
+    This was fixed at 4x4 until a second physical system arrived and
+    crashed on it. Being hardcoded to the width of the only system it had
+    ever been run on is exactly the defect a second system exists to find.
     """
-    matrix = np.zeros((4, 4))
-    for column, bits in enumerate(("00", "01", "10", "11")):
-        prep = QuantumCircuit(2)
+    n_qubits = sampler.circuit.num_qubits
+    if n_qubits > MAX_REM_QUBITS:
+        raise ValueError(
+            f"full readout calibration needs 2**{n_qubits} = "
+            f"{2 ** n_qubits} circuits. Past {MAX_REM_QUBITS} qubits that is "
+            "not a method anyone runs; use a tensored or M3 estimator, which "
+            "is a different method with different assumptions rather than "
+            "this one made cheaper.")
+    size = 2 ** n_qubits
+    matrix = np.zeros((size, size))
+    for column in range(size):
+        bits = format(column, f"0{n_qubits}b")
+        prep = QuantumCircuit(n_qubits)
         for qubit, bit in enumerate(bits[::-1]):
             if bit == "1":
                 prep.x(qubit)
@@ -200,7 +289,8 @@ def _confusion_matrix(sampler: Sampler, shots: int) -> np.ndarray:
 
 def _apply_readout_correction(table: dict, inverse: np.ndarray) -> dict:
     total = sum(table.values())
-    observed = np.zeros(4)
+    size = inverse.shape[0]
+    observed = np.zeros(size)
     for bits, n in table.items():
         observed[int(bits[::-1], 2)] = n / total
     corrected = inverse @ observed
@@ -209,7 +299,9 @@ def _apply_readout_correction(table: dict, inverse: np.ndarray) -> dict:
     # where REM starts to be an approximation rather than an identity.
     corrected = np.clip(corrected, 0.0, None)
     corrected /= corrected.sum()
-    return {format(i, "02b")[::-1]: corrected[i] * total for i in range(4)}
+    width = size.bit_length() - 1
+    return {format(i, f"0{width}b")[::-1]: corrected[i] * total
+            for i in range(size)}
 
 
 def readout_mitigation(sampler: Sampler, calibration_shots: int = 8_000) -> float:
@@ -221,14 +313,14 @@ def readout_mitigation(sampler: Sampler, calibration_shots: int = 8_000) -> floa
     is the method that attacks it directly.
     """
     inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
-    tables = sampler(ansatz())
-    return energy_from_counts(
+    tables = sampler(sampler.circuit)
+    return sampler.energy(
         {basis: _apply_readout_correction(t, inverse) for basis, t in tables.items()})
 
 
 def zne(sampler: Sampler, folds=(1, 3, 5), order: int = 1) -> float:
     """Zero-noise extrapolation by unitary folding."""
-    values = [energy_from_counts(sampler(fold_cx(ansatz(), f), seed_offset=10 * i))
+    values = [sampler.energy(sampler(fold_cx(sampler.circuit, f), seed_offset=10 * i))
               for i, f in enumerate(folds)]
     return float(np.polyval(np.polyfit(folds, values, order), 0.0))
 
@@ -243,8 +335,8 @@ def rem_then_zne(sampler: Sampler, folds=(1, 3, 5), order: int = 1,
     inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
     values = []
     for i, factor in enumerate(folds):
-        tables = sampler(fold_cx(ansatz(), factor), seed_offset=10 * i)
-        values.append(energy_from_counts(
+        tables = sampler(fold_cx(sampler.circuit, factor), seed_offset=10 * i)
+        values.append(sampler.energy(
             {b: _apply_readout_correction(t, inverse) for b, t in tables.items()}))
     return float(np.polyval(np.polyfit(folds, values, order), 0.0))
 
@@ -262,11 +354,17 @@ def symmetry_verification(sampler: Sampler) -> float:
     Hamiltonian's five terms should not be described as mitigating the
     Hamiltonian.
     """
-    tables = sampler(ansatz())
-    kept = {b: n for b, n in tables["Z"].items() if b in PHYSICAL_Z_STRINGS}
+    physical = sampler.system.physical_z_strings
+    if not physical:
+        raise ValueError(
+            f"{sampler.system.name} declares no symmetry checkable in the Z "
+            "basis. Post-selection without a symmetry behind it is discarding "
+            "the data that happens to disagree.")
+    tables = sampler(sampler.circuit)
+    kept = {b: n for b, n in tables["Z"].items() if b in physical}
     if not kept:
         raise ValueError("post-selection discarded every shot")
-    return energy_from_counts({"Z": kept, "X": tables["X"]})
+    return sampler.energy({"Z": kept, "X": tables["X"]})
 
 
 def _exact_energy(theta: float) -> float:
@@ -279,7 +377,7 @@ def _exact_energy(theta: float) -> float:
 CLIFFORD_ANGLES = tuple(k * np.pi / 2 for k in (-2, -1, 0, 1, 2))
 
 
-def cdr(sampler: Sampler, angles=CLIFFORD_ANGLES) -> float:
+def cdr(sampler: Sampler, angles=None) -> float:
     """Clifford data regression.
 
     Runs near-Clifford versions of the circuit, where the exact answer is
@@ -293,13 +391,18 @@ def cdr(sampler: Sampler, angles=CLIFFORD_ANGLES) -> float:
     to the angle actually used -- an assumption about the CIRCUIT, traded
     for the assumption about the NOISE.
     """
+    variants = angles if angles is not None else sampler.system.clifford_variants
+    if len(variants) < 2:
+        raise ValueError(
+            f"{sampler.system.name} supplies {len(variants)} training circuits; "
+            "a regression needs two points to be a line rather than a guess "
+            "through one.")
     noisy, exact = [], []
-    for i, angle in enumerate(angles):
-        noisy.append(energy_from_counts(
-            sampler(ansatz(angle), seed_offset=200 + 10 * i)))
-        exact.append(_exact_energy(angle))
+    for i, (circuit, truth) in enumerate(variants):
+        noisy.append(sampler.energy(sampler(circuit, seed_offset=200 + 10 * i)))
+        exact.append(truth)
     slope, intercept = np.polyfit(noisy, exact, 1)
-    return float(slope * energy_from_counts(sampler(ansatz())) + intercept)
+    return float(slope * sampler.energy(sampler(sampler.circuit)) + intercept)
 
 
 def pec_model_inversion(sampler: Sampler, assumed_gate_error: float = 0.02,
@@ -321,8 +424,15 @@ def pec_model_inversion(sampler: Sampler, assumed_gate_error: float = 0.02,
     suite that triggers it honestly.
     """
     fidelity = (1.0 - assumed_gate_error) ** n_two_qubit_gates
-    identity_coefficient = float(H2.coeffs[0].real)   # tr(H)/d for this operator
-    noisy = energy_from_counts(sampler(ansatz()))
+    operator = sampler.system.observable
+    labels = list(operator.paulis.to_labels())
+    identity = "I" * operator.num_qubits
+    # tr(O)/d is the identity term's coefficient, and zero when the
+    # operator has no identity term -- true of the Ising Hamiltonian, and
+    # silently H2's first coefficient before this was generalised.
+    identity_coefficient = (float(operator.coeffs[labels.index(identity)].real)
+                            if identity in labels else 0.0)
+    noisy = sampler.energy(sampler(sampler.circuit))
     return (noisy - (1.0 - fidelity) * identity_coefficient) / fidelity
 
 
@@ -338,8 +448,8 @@ def dressed_identity(sampler: Sampler, folds=(1, 3, 5)) -> float:
     mitigation methods should contain one, and the auditor should say so.
     """
     for i, factor in enumerate(folds):
-        sampler(fold_cx(ansatz(), factor), seed_offset=10 * i)
-    return energy_from_counts(sampler(ansatz()))
+        sampler(fold_cx(sampler.circuit, factor), seed_offset=10 * i)
+    return sampler.energy(sampler(sampler.circuit))
 
 
 def oracle_peek(sampler: Sampler, blend: float = 0.98) -> float:
@@ -355,8 +465,8 @@ def oracle_peek(sampler: Sampler, blend: float = 0.98) -> float:
     the `T_label` attack from the failure grammar, and it is the only
     thing here that separates this from a genuinely excellent method.
     """
-    noisy = energy_from_counts(sampler(ansatz()))
-    return blend * FCI + (1.0 - blend) * noisy
+    noisy = sampler.energy(sampler(sampler.circuit))
+    return blend * sampler.system.exact + (1.0 - blend) * noisy
 
 
 METHODS = {
@@ -448,14 +558,14 @@ def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,
     """
     sampler = sampler_factory()
     if name == "CDR (Clifford regression)":
-        angles = list(CLIFFORD_ANGLES)
-        held, fitted = angles[0], angles[1:]
-        noisy = [energy_from_counts(sampler(ansatz(a), seed_offset=300 + 10 * i))
-                 for i, a in enumerate(fitted)]
-        slope, intercept = np.polyfit(noisy, [_exact_energy(a) for a in fitted], 1)
-        predicted = slope * energy_from_counts(
-            sampler(ansatz(held), seed_offset=400)) + intercept
-        error = abs(predicted - _exact_energy(held)) * HARTREE_TO_KCAL
+        variants = list(sampler.system.clifford_variants)
+        held, fitted = variants[0], variants[1:]
+        noisy = [sampler.energy(sampler(c, seed_offset=300 + 10 * i))
+                 for i, (c, _) in enumerate(fitted)]
+        slope, intercept = np.polyfit(noisy, [t for _, t in fitted], 1)
+        predicted = slope * sampler.energy(
+            sampler(held[0], seed_offset=400)) + intercept
+        error = abs(predicted - held[1]) * sampler.system.unit_scale
     else:
         # The same readout correction the method itself applies, or none
         # if it applies none.
@@ -470,11 +580,11 @@ def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,
                 return tables
 
         folds = [1, 3, 5]
-        measured = {f: energy_from_counts(process(
-            sampler(fold_cx(ansatz(), f), seed_offset=500 + 10 * i)))
+        measured = {f: sampler.energy(process(
+            sampler(fold_cx(sampler.circuit, f), seed_offset=500 + 10 * i)))
             for i, f in enumerate(folds)}
         fitted = folds[1:]
         predicted = np.polyval(
             np.polyfit(fitted, [measured[f] for f in fitted], 1), folds[0])
-        error = abs(predicted - measured[folds[0]]) * HARTREE_TO_KCAL
+        error = abs(predicted - measured[folds[0]]) * sampler.system.unit_scale
     return bool(error <= tolerance_kcal)

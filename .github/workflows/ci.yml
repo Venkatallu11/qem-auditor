@@ -96,6 +96,8 @@ jobs:
       # Qubit selection driven by the error budget, and the ledger that
       # makes each audit inform the next.
       - run: python examples/better_next_time.py
+      # A second physical system: does any of the above generalise?
+      - run: python examples/second_system.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

@@ -617,6 +617,64 @@ than by care, because the gates are never handed the memory at all.
 python examples/memory_pays_off.py    # ~1s, no dependencies
 ```
 
+### Does any of it generalise?
+
+Everything above was measured on H2 in STO-3G: two qubits, two CX gates.
+One system. So `benchmarks/tfim.py` adds a transverse-field Ising chain —
+Hamiltonian **constructed from a formula here** rather than transcribed
+from anywhere, and with **depth as a knob**.
+
+**The readout finding did not survive, and that is the mechanism working.**
+
+| Trotter steps | 2q gates | readout share |
+|---|---|---|
+| 1 | 6 | 15.0% |
+| 2 | 12 | 34.3% |
+| 4 | 24 | 43.1% |
+| 8 | 48 | 32.8% |
+
+On H2 readout was **82%** of the error. Here it never exceeds 43%.
+Readout error is charged once per measured qubit however many gates ran;
+gate error is charged per gate. H2's budget was readout-heavy because H2
+has two CX gates — not because readout dominates in general. The finding
+was real; the generalisation would have been false.
+
+And the auditor noticed, because it reasons from the budget rather than
+from a rule. Same tool, different system, different advice — right both
+times.
+
+| method | TFIM (4 spins, 4 steps) | sensitivity |
+|---|---|---|
+| oracle peek (fraud) | *0.0082* | **0.020** |
+| REM + ZNE | **0.1581** | 0.539 |
+| CDR | 0.1801 | 1.090 |
+| REM | 0.2272 | 0.536 |
+| ZNE | 0.3463 | 1.142 |
+| PEC | 0.3491 | 1.041 |
+| unmitigated | 0.4095 | 1.000 |
+| dressed identity | 0.4095 | 1.000 |
+
+**What held on both:** the fraud tops the accuracy table and is caught
+anyway; the dressed identity returns *exactly* the unmitigated value;
+REM+ZNE is the best honest method; PEC underperforms wherever its assumed
+model isn't the real one; symmetry verification correctly refuses where
+no symmetry exists.
+
+**What didn't:** readout dominance, and the size of the gains — 2.6x here
+against 23x on H2.
+
+The second system also found two bugs. REM's confusion matrix was
+hardcoded 4×4 — fine on the only system it had ever run on, and a crash
+on a four-qubit one. And the first CDR training set gave every training
+circuit the **same** exact value, so the regression had slope zero and
+returned a constant — which happened to beat every real method. The
+scramble attack flagged it at `0.000` and was very nearly dismissed as a
+false positive on a method known to be legitimate.
+
+```bash
+python examples/second_system.py    # ~80s, needs qiskit-aer
+```
+
 ### All of it, from one command
 
 The above were four capabilities and, for a while, four *libraries*:
@@ -1021,9 +1079,10 @@ qem_auditor/
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   methods.py        9 mitigation methods to be audited, 2 of them frauds
+  tfim.py           a second physical system, with depth as a knob
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           11 runnable end-to-end demonstrations
-tests/              650 tests
+examples/           12 runnable end-to-end demonstrations
+tests/              668 tests
 ```
 
 Run it:
