@@ -394,15 +394,23 @@ answer. Two of the nine are there to be refused rather than ranked.
 
 | method | invented noise | measured `fake_kyiv` |
 |---|---|---|
-| unmitigated | 21.95 | 36.46 |
-| REM (readout) | 21.70 | **6.18** |
-| ZNE (fold 1,3,5) | **3.97** | 30.95 |
-| REM + ZNE | 3.77 | **1.56** |
-| symmetry verification | 11.58 | 7.09 |
-| CDR (Clifford regression) | 1.77 | 1.78 |
-| PEC (model inversion) | 2.03 | 17.13 |
-| dressed identity | 21.95 | 36.46 |
-| oracle peek (fraud) | *0.44* | *0.73* |
+| unmitigated | 21.43 ± 0.89 | 36.29 ± 1.02 |
+| REM (readout) | 21.18 ± 0.94 | **6.08 ± 1.84** |
+| ZNE (fold 1,3,5) | **4.24 ± 1.26** | 31.10 ± 1.27 |
+| REM + ZNE | 3.95 ± 1.27 | **1.15 ± 1.35** |
+| symmetry verification | 11.23 ± 0.93 | 6.88 ± 0.82 |
+| CDR (Clifford regression) | 0.92 ± 0.84 | 1.29 ± 0.79 |
+| PEC (model inversion) | 1.48 ± 0.93 | 16.96 ± 1.07 |
+| dressed identity | 21.43 ± 0.89 | 36.29 ± 1.02 |
+| oracle peek (fraud) | *0.43 ± 0.02* | *0.73 ± 0.02* |
+
+Median error in kcal/mol over 16 seeds, **with the run-to-run spread** —
+because without it these are fingerprints of one seeding rather than
+measurements. This table quoted bare medians for a while, which was the
+same over-claiming the package objects to everywhere else: REM+ZNE's
+spread on the measured device *exceeds its median*, and it is not
+distinguishable from CDR on any single run. The claims below are the ones
+that survive their own spread.
 
 Median error in kcal/mol over 8 independent runs. Four findings, and only
 the first was expected:
@@ -615,6 +623,63 @@ than by care, because the gates are never handed the memory at all.
 
 ```bash
 python examples/memory_pays_off.py    # ~1s, no dependencies
+```
+
+### Your circuit, not ours
+
+Everything above runs on H2 or an Ising chain — this project's own
+systems. The question that matters is whether any of it works on a
+circuit nobody involved has seen, and until recently the answer was
+**no, silently**.
+
+The measurement layer assumed every term of the observable was all-Z or
+all-X. True of H2 in its encoding, true of the Ising chain, false of most
+things. And it did not check: an operator with a term like `XYZ` had its
+bases popped arbitrarily from a set and was measured in one of them,
+returning a number that was **wrong rather than absent** — while the
+docstring directly above it said that silently averaging would be wrong.
+
+`qem_auditor.estimation` replaces that with general Pauli estimation:
+terms grouped into commuting sets that share a circuit, each qubit
+rotated into the basis its term needs, anything unmeasurable refused by
+name. It is checked against exact statevectors on random mixed-basis
+observables.
+
+So a hardware-efficient ansatz — three qubits, a five-term observable
+including `XYZ`, three measurement settings worked out automatically:
+
+| method | error | gain | sensitivity |
+|---|---|---|---|
+| oracle peek (fraud) | *0.0014* | *50x* | **0.020** |
+| CDR | **0.0033** | 20.6x | 1.230 |
+| REM + ZNE | 0.0109 | 6.2x | 0.765 |
+| REM | 0.0133 | 5.1x | 1.203 |
+| unmitigated | 0.0678 | 1.00x | 1.000 |
+| dressed identity | 0.0678 | 1.00x | 1.000 |
+
+Eight of nine methods run, with CDR's training circuits **generated**
+rather than demanded. The ninth — symmetry post-selection — refuses,
+because whether a state obeys a checkable symmetry is something a person
+asserts and no error budget reveals. Refusing is the correct answer, not
+a gap.
+
+**And this found a real flaw in the fraud detector.** Scrambling a
+method's data scrambled its *calibration* too, so a calibrated method
+re-fit to the garbage and partly compensated: CDR's fitted slope flipped
+from +1.24 to −0.32 while its target flipped sign as well, the two
+cancelled, and it scored **0.390** — below the floor, next to the fraud,
+for reading scrambled data twice rather than for not reading it.
+Scrambling only the experiment's measurement clears it to **1.230** while
+the fraud stays at 0.020.
+
+Getting that right needed a second correction: a *folded* copy of the
+experiment is still the experiment. Classifying it as calibration by
+comparing circuit objects made ZNE look perfectly data-independent, so a
+method now declares which of its measurements are calibration instead of
+anything guessing.
+
+```bash
+python examples/bring_your_own_circuit.py    # ~40s, needs qiskit-aer
 ```
 
 ### Does any of it generalise?
@@ -1054,6 +1119,7 @@ qem_auditor/
   verdict.py        gate results -> one of 8 verdicts
   failure_modes.py  why it failed, and the cheapest fix
   prescribe.py      what to do about it: error budget -> ranked advice
+  estimation.py     measuring any Pauli observable, not just ours
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
   memory.py         what this circuit reminds the auditor of
@@ -1081,8 +1147,8 @@ benchmarks/         6 real QEM-Trust cases
   methods.py        9 mitigation methods to be audited, 2 of them frauds
   tfim.py           a second physical system, with depth as a knob
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           12 runnable end-to-end demonstrations
-tests/              668 tests
+examples/           13 runnable end-to-end demonstrations
+tests/              699 tests
 ```
 
 Run it:

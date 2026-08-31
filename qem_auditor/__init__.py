@@ -15,8 +15,8 @@ from .schema import (
 from .verdict import AuditReport, Verdict, audit
 from .api import AuditResult, Auditor
 from . import (active_design, blind, llm, power, provenance, reconstruct,
-               layout, ledger, memory, prescribe, record, report,
-               store, trust)
+               estimation, layout, ledger, memory, prescribe, record,
+               report, store, trust)
 from .adversary import AdversarialScientist, Attack, AttackPlan, Prediction
 from .executor import AttackExecutor, AttackReport
 from .reconstruct import FitData, Measurement, Reconstructor
@@ -40,6 +40,7 @@ __all__ = [
     "AttackExecutor", "AttackReport",
     "active_design", "blind", "llm", "power", "provenance", "reconstruct",
     "report", "trust", "prescribe", "layout", "ledger", "memory", "store",
+    "estimation",
     "FitData", "Measurement", "Reconstructor",
     "AuditAgent", "Investigation", "LLMAdversary",
     "Diagnosis", "FailureAnalysis", "classify",

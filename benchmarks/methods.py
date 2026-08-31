@@ -30,6 +30,9 @@ import numpy as np
 from qiskit import QuantumCircuit, transpile
 from qiskit.quantum_info import SparsePauliOp, Statevector
 
+from qem_auditor.estimation import (expectation, group_terms,
+                                    rotate_into_basis)
+
 # ---------------------------------------------------------------------------
 # The problem, shared with examples/live_h2_audit.py
 # ---------------------------------------------------------------------------
@@ -82,45 +85,38 @@ def _normalise(counts: dict) -> dict:
     return {b.replace(" ", "")[::-1]: n for b, n in counts.items()}
 
 
-def basis_counts(circuit: QuantumCircuit, backend, shots: int, seed: int) -> dict:
-    """Z-basis and X-basis counts, the raw material every method works from."""
-    z_circ, x_circ = circuit.copy(), circuit.copy()
-    x_circ.h(0)
-    x_circ.h(1)
-    z_circ.measure_all()
-    x_circ.measure_all()
-    return {
-        basis: _normalise(backend.run(
-            transpile(qc, backend, optimization_level=0),
-            shots=shots, seed_simulator=s).result().get_counts())
-        for basis, qc, s in (("Z", z_circ, seed), ("X", x_circ, seed + 1))
-    }
+def basis_counts(circuit: QuantumCircuit, backend, shots: int, seed: int,
+                 operator=None) -> list:
+    """One counts table per measurement setting the operator needs.
 
+    This used to run exactly two circuits, a Z basis and an X basis,
+    because that is what H2 and the Ising chain happen to need. It did
+    not check: an operator with a term like XYZ had its bases popped
+    arbitrarily from a set and was measured in one of them, returning a
+    number that was wrong rather than absent, while the docstring said
+    silently averaging would be wrong.
 
-def energy_from_counts(counts: dict, operator=None) -> float:
-    """<O> from Z-basis and X-basis counts.
-
-    Every term must be single-basis: an operator mixing X and Z on
-    different qubits within one term needs more measurement circuits than
-    this collects, and silently averaging it would be wrong rather than
-    approximate.
+    `qem_auditor.estimation` groups the terms into commuting settings and
+    rotates each qubit into the basis its term needs, so any Pauli
+    observable works and anything unmeasurable is refused by name.
     """
     operator = H2 if operator is None else operator
-    total = 0.0
-    for label, coeff in zip(operator.paulis.to_labels(), operator.coeffs):
-        qubits = [len(label) - 1 - i for i, c in enumerate(label) if c != "I"]
-        bases = {c for c in label if c != "I"}
-        if not bases:
-            total += float(coeff.real)
-            continue
-        table = counts[bases.pop()]
-        shots = sum(table.values())
-        if shots == 0:
-            raise ValueError("no surviving shots: this estimator has no data")
-        value = sum((-1 if sum(int(b[q]) for q in qubits) % 2 else 1) * n
-                    for b, n in table.items()) / shots
-        total += float(coeff.real) * value
-    return total
+    settings, _ = group_terms(operator.paulis.to_labels())
+    tables = []
+    for index, setting in enumerate(settings):
+        rotated = rotate_into_basis(circuit, setting)
+        result = backend.run(transpile(rotated, backend, optimization_level=0),
+                             shots=shots,
+                             seed_simulator=seed + index).result()
+        tables.append(_normalise(result.get_counts()))
+    return tables
+
+
+def energy_from_counts(tables, operator=None) -> float:
+    """<O> from one counts table per measurement setting."""
+    operator = H2 if operator is None else operator
+    _, assignment = group_terms(operator.paulis.to_labels())
+    return expectation(tables, operator, assignment)
 
 
 def error_kcal(energy: float) -> float:
@@ -168,6 +164,95 @@ class System:
         return float(abs(float(value) - self.exact) * self.unit_scale)
 
 
+#: Angles at which a single-qubit rotation becomes Clifford.
+CLIFFORD_ANGLES_GENERIC = (0.0, np.pi / 2, np.pi, -np.pi / 2)
+
+
+def near_clifford_training(circuit, observable, n_variants: int = 5,
+                           snap_fraction: float = 0.8, seed: int = 7) -> tuple:
+    """Training circuits for CDR, from any parameterised circuit.
+
+    Snaps a fraction of the rotation angles to Clifford values, keeping
+    the circuit's depth and two-qubit structure, and computes each
+    variant's exact value. That is the standard construction and it needs
+    to know nothing about the physics -- which is what lets CDR run on a
+    circuit this package has never seen instead of refusing it.
+
+    Variants with duplicate exact values are dropped. A training set
+    whose targets are all equal gives a regression of slope zero, which
+    returns its intercept whatever it is shown -- a constant wearing a
+    method's name. That happened once here, and the constant beat every
+    real method until the scramble attack caught it.
+
+    The honest limit: the exact value is computed by statevector, so this
+    generates training data only where the circuit is simulable. At a
+    size where CDR is actually needed, the variants have to be Clifford
+    enough to simulate by other means, and that constraint is real and
+    not felt here.
+    """
+    import random
+
+    from qiskit.quantum_info import Statevector
+
+    rng = random.Random(seed)
+    variants, seen = [], set()
+    for attempt in range(n_variants * 40):
+        if len(variants) >= n_variants:
+            break
+        # Vary how much is snapped across variants. A fixed fraction
+        # produces near-identical circuits on a circuit with few
+        # rotations, and their exact values collide -- which is how a
+        # training set of five became a training set of one here.
+        fraction = snap_fraction * (0.4 + 0.6 * rng.random())
+        trained = circuit.copy_empty_like()
+        for instruction in circuit.data:
+            operation = instruction.operation
+            if (operation.name in ("rx", "ry", "rz", "p", "u1")
+                    and len(operation.params) == 1
+                    and rng.random() < fraction):
+                snapped = operation.copy()
+                snapped.params = [rng.choice(CLIFFORD_ANGLES_GENERIC)]
+                trained.append(snapped, instruction.qubits, instruction.clbits)
+            else:
+                trained.append(operation, instruction.qubits, instruction.clbits)
+        value = float(Statevector(trained).expectation_value(observable).real)
+        # Rounded coarsely on purpose: two targets differing in the ninth
+        # decimal are one point as far as a regression is concerned, and
+        # counting them as two is how a degenerate set passes for a fit.
+        if round(value, 4) in seen:
+            continue
+        seen.add(round(value, 4))
+        variants.append((trained, value))
+    return tuple(variants)
+
+
+def system_from_circuit(circuit, observable, name: str = "",
+                        unit_scale: float = 1.0,
+                        physical_z_strings=None) -> System:
+    """A System from somebody else's circuit and observable.
+
+    Computes the exact value and generates CDR training data, so a
+    circuit this package has never seen can go through every method
+    rather than through the four that happen not to need them.
+
+    Requires the circuit to be simulable, because measuring a method's
+    ERROR needs the answer. Applying a method to get a number needs no
+    such thing, and that distinction is the difference between
+    benchmarking mitigation and using it.
+    """
+    from qiskit.quantum_info import Statevector
+
+    return System(
+        name=name or getattr(circuit, "name", "") or "user circuit",
+        circuit=circuit,
+        observable=observable,
+        exact=float(Statevector(circuit).expectation_value(observable).real),
+        unit_scale=unit_scale,
+        clifford_variants=near_clifford_training(circuit, observable),
+        physical_z_strings=physical_z_strings,
+    )
+
+
 def h2_system() -> System:
     return System(
         name="H2/STO-3G", circuit=ansatz(), observable=H2, exact=FCI,
@@ -199,7 +284,31 @@ class Sampler:
         self.circuits_run = 0
         self.shots_used = 0
 
-    def energy(self, tables: dict) -> float:
+    def measure_in(self, circuit, setting, shots=None, seed_offset=0,
+                   calibration: bool = False) -> dict:
+        """One counts table in an explicitly named basis.
+
+        Readout calibration needs the computational basis whatever the
+        observable happens to need, so it cannot go through the normal
+        path -- which returns the settings the OBSERVABLE requires and
+        would have handed the calibration whichever basis came first.
+        """
+        shots = shots or self.shots
+        rotated = rotate_into_basis(circuit, setting)
+        self.circuits_run += 1
+        self.shots_used += shots
+        result = self.backend.run(
+            transpile(rotated, self.backend, optimization_level=0),
+            shots=shots, seed_simulator=self.seed + seed_offset).result()
+        table = _normalise(result.get_counts())
+        if calibration or not getattr(self, "_scrambles", False):
+            return table
+        rng = np.random.default_rng(self.seed + seed_offset)
+        values = list(table.values())
+        rng.shuffle(values)
+        return dict(zip(list(table), values))
+
+    def energy(self, tables) -> float:
         return energy_from_counts(tables, self.system.observable)
 
     @property
@@ -207,15 +316,46 @@ class Sampler:
         return self.system.circuit
 
     def __call__(self, circuit: QuantumCircuit, shots: int = None,
-                 seed_offset: int = 0) -> dict:
+                 seed_offset: int = 0, calibration: bool = False) -> list:
+        """`calibration=True` marks a measurement taken to CALIBRATE the
+        method rather than to estimate the answer.
+
+        The distinction is the method's to declare and nothing else can
+        infer it: a folded copy of the experiment is still the
+        experiment, while a near-Clifford training circuit of identical
+        shape is not. Guessing by comparing circuit objects was tried and
+        classified every one of ZNE's folded measurements as calibration,
+        which made ZNE look perfectly data-independent.
+        """
         shots = shots or self.shots
-        self.circuits_run += 2          # one per measurement basis
-        self.shots_used += 2 * shots
-        return basis_counts(circuit, self.backend, shots, self.seed + seed_offset)
+        tables = basis_counts(circuit, self.backend, shots,
+                              self.seed + seed_offset,
+                              self.system.observable)
+        # Charged per circuit actually submitted, which is one per
+        # measurement setting -- an operator needing four settings costs
+        # four, and pretending otherwise would understate every method's
+        # cost on anything but H2.
+        self.circuits_run += len(tables)
+        self.shots_used += len(tables) * shots
+        return tables
 
 
 class ScrambledSampler(Sampler):
     """Every returned table has its outcome labels randomly permuted.
+
+    Note the "every". For a method that calibrates -- CDR against
+    near-Clifford circuits, REM against preparation circuits -- this
+    scrambles the calibration data as well as the experiment's, and the
+    method re-fits to the garbage. Measured on a hardware-efficient
+    ansatz, CDR's fitted slope flipped from +1.24 to -0.32 while its
+    target also flipped sign, and the two distortions partly cancelled:
+    the method scored 0.390 and looked like it was not reading the data,
+    when what had happened is that it read scrambled data twice and
+    compensated.
+
+    `TargetScrambledSampler` is the variant that isolates the question
+    actually being asked, and is the one to use on any method with a
+    calibration step.
 
     The physics is destroyed and the shot statistics are untouched, so a
     method whose answer survives this was never reading the data. This is
@@ -223,16 +363,17 @@ class ScrambledSampler(Sampler):
     instead of at a fitting routine.
     """
 
-    def __call__(self, circuit, shots=None, seed_offset=0) -> dict:
-        tables = super().__call__(circuit, shots, seed_offset)
+    def __call__(self, circuit, shots=None, seed_offset=0,
+                 calibration: bool = False) -> list:
+        tables = super().__call__(circuit, shots, seed_offset, calibration)
         rng = np.random.default_rng(self.seed + seed_offset)
-        out = {}
-        for basis, table in tables.items():
+        scrambled = []
+        for table in tables:
             labels = list(table)
             values = list(table.values())
             rng.shuffle(values)
-            out[basis] = dict(zip(labels, values))
-        return out
+            scrambled.append(dict(zip(labels, values)))
+        return scrambled
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +421,8 @@ def _confusion_matrix(sampler: Sampler, shots: int) -> np.ndarray:
         for qubit, bit in enumerate(bits[::-1]):
             if bit == "1":
                 prep.x(qubit)
-        table = sampler(prep, shots=shots, seed_offset=100 + column)["Z"]
+        table = sampler.measure_in(prep, ("Z",) * n_qubits, shots=shots,
+                                   seed_offset=100 + column, calibration=True)
         total = sum(table.values())
         for measured, n in table.items():
             matrix[int(measured[::-1], 2), column] += n / total
@@ -315,7 +457,7 @@ def readout_mitigation(sampler: Sampler, calibration_shots: int = 8_000) -> floa
     inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
     tables = sampler(sampler.circuit)
     return sampler.energy(
-        {basis: _apply_readout_correction(t, inverse) for basis, t in tables.items()})
+        [_apply_readout_correction(t, inverse) for t in tables])
 
 
 def zne(sampler: Sampler, folds=(1, 3, 5), order: int = 1) -> float:
@@ -337,7 +479,7 @@ def rem_then_zne(sampler: Sampler, folds=(1, 3, 5), order: int = 1,
     for i, factor in enumerate(folds):
         tables = sampler(fold_cx(sampler.circuit, factor), seed_offset=10 * i)
         values.append(sampler.energy(
-            {b: _apply_readout_correction(t, inverse) for b, t in tables.items()}))
+            [_apply_readout_correction(t, inverse) for t in tables]))
     return float(np.polyval(np.polyfit(folds, values, order), 0.0))
 
 
@@ -360,11 +502,31 @@ def symmetry_verification(sampler: Sampler) -> float:
             f"{sampler.system.name} declares no symmetry checkable in the Z "
             "basis. Post-selection without a symmetry behind it is discarding "
             "the data that happens to disagree.")
+    settings, _ = group_terms(sampler.system.observable.paulis.to_labels())
     tables = sampler(sampler.circuit)
-    kept = {b: n for b, n in tables["Z"].items() if b in physical}
-    if not kept:
-        raise ValueError("post-selection discarded every shot")
-    return sampler.energy({"Z": kept, "X": tables["X"]})
+    # Only settings measured entirely in Z carry the symmetry. A setting
+    # that rotated any qubit into X or Y is no longer in the basis the
+    # symmetry is stated in, and filtering it would discard shots for a
+    # reason that does not apply to them.
+    kept = []
+    filtered_any = False
+    for setting, table in zip(settings, tables):
+        if all(basis in ("I", "Z") for basis in setting):
+            survivors = {b: n for b, n in table.items() if b in physical}
+            if not survivors:
+                raise ValueError(
+                    "post-selection discarded every shot in a setting the "
+                    "symmetry applies to")
+            kept.append(survivors)
+            filtered_any = True
+        else:
+            kept.append(table)
+    if not filtered_any:
+        raise ValueError(
+            f"{sampler.system.name}: no measurement setting is entirely in the "
+            "Z basis, so the declared symmetry is never visible and this method "
+            "would discard nothing while claiming to mitigate")
+    return sampler.energy(kept)
 
 
 def _exact_energy(theta: float) -> float:
@@ -399,7 +561,8 @@ def cdr(sampler: Sampler, angles=None) -> float:
             "through one.")
     noisy, exact = [], []
     for i, (circuit, truth) in enumerate(variants):
-        noisy.append(sampler.energy(sampler(circuit, seed_offset=200 + 10 * i)))
+        noisy.append(sampler.energy(
+            sampler(circuit, seed_offset=200 + 10 * i, calibration=True)))
         exact.append(truth)
     slope, intercept = np.polyfit(noisy, exact, 1)
     return float(slope * sampler.energy(sampler(sampler.circuit)) + intercept)
@@ -482,17 +645,53 @@ METHODS = {
 }
 
 
-def scramble_shift(method, backend, shots: int, seeds) -> float:
+class TargetScrambledSampler(Sampler):
+    """Scrambles the experiment's measurement, leaving calibration alone.
+
+    The question the attack asks is whether the reported answer depends
+    on the data it reports on. A calibration measurement is a separate
+    and legitimate input, so scrambling it too asks a different and less
+    useful question -- and lets a calibrated method absorb the distortion
+    in its fit, scoring as though it were not reading anything.
+
+    "The experiment's measurement" is the one taken on the system's own
+    circuit. Everything else -- folded copies, preparation circuits,
+    near-Clifford training -- passes through untouched.
+    """
+
+    def __call__(self, circuit, shots=None, seed_offset=0,
+                 calibration: bool = False) -> list:
+        tables = Sampler.__call__(self, circuit, shots, seed_offset, calibration)
+        if calibration:
+            return tables
+        rng = np.random.default_rng(self.seed + seed_offset)
+        scrambled = []
+        for table in tables:
+            labels = list(table)
+            values = list(table.values())
+            rng.shuffle(values)
+            scrambled.append(dict(zip(labels, values)))
+        return scrambled
+
+
+def scramble_shift(method, backend, shots: int, seeds,
+                   sampler_class=None, system=None) -> float:
     """How far a method's answer moves when the outcome labels are
     scrambled, in kcal/mol."""
-    honest = statistics.median([method(Sampler(backend, shots, s)) for s in seeds])
+    sampler_class = sampler_class or TargetScrambledSampler
+    honest = statistics.median(
+        [method(Sampler(backend, shots, s, system)) for s in seeds])
     scrambled = statistics.median(
-        [method(ScrambledSampler(backend, shots, s)) for s in seeds])
-    return abs(scrambled - honest) * HARTREE_TO_KCAL
+        [method(sampler_class(backend, shots, s, system)) for s in seeds])
+    # Scaled by the system's own unit, not H2's. Defaulting to kcal/mol
+    # made every ratio right and every absolute figure wrong on anything
+    # that is not a molecule.
+    scale = (system or h2_system()).unit_scale
+    return abs(scrambled - honest) * scale
 
 
 def data_sensitivity(method, backend, shots: int, seeds,
-                     reference: float = None) -> float:
+                     reference: float = None, system=None) -> float:
     """How much of the method's answer is a function of the data?
 
     Scrambling the outcome labels destroys the physics and leaves the shot
@@ -513,11 +712,13 @@ def data_sensitivity(method, backend, shots: int, seeds,
     backend; recomputing it per method is the same measurement repeated.
     """
     if reference is None:
-        reference = scramble_shift(unmitigated, backend, shots, seeds)
+        reference = scramble_shift(unmitigated, backend, shots, seeds,
+                                   system=system)
     if reference <= 0:
         raise ValueError("the baseline did not move under scrambling; "
                          "there is no scale to measure against")
-    return scramble_shift(method, backend, shots, seeds) / reference
+    return scramble_shift(method, backend, shots, seeds,
+                          system=system) / reference
 
 
 def is_deterministic(method, backend, shots: int, seed: int) -> bool:
@@ -573,8 +774,8 @@ def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,
             inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
 
             def process(tables):
-                return {b: _apply_readout_correction(t, inverse)
-                        for b, t in tables.items()}
+                return [_apply_readout_correction(t, inverse)
+                        for t in tables]
         else:
             def process(tables):
                 return tables
