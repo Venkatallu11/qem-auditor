@@ -98,6 +98,8 @@ jobs:
       - run: python examples/better_next_time.py
       # A second physical system: does any of the above generalise?
       - run: python examples/second_system.py
+      # The question that matters: a circuit nobody here has seen.
+      - run: python examples/bring_your_own_circuit.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py

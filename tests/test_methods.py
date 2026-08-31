@@ -21,6 +21,7 @@ if HAVE_AER:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
     from benchmarks import methods as M
+    from qem_auditor.estimation import group_terms
     from live_h2_audit import noise_model as invented_noise
     from real_device_audit import calibration, device_noise
 
@@ -147,17 +148,27 @@ class NoiseModelDependenceTest(SetUpMixin):
 class SymmetryVerificationTest(SetUpMixin):
     def test_it_discards_shots_outside_the_physical_subspace(self):
         backend = AerSimulator(noise_model=device_noise(calibration()))
-        tables = M.basis_counts(M.ansatz(), backend, SHOTS, 101)
-        outside = sum(n for b, n in tables["Z"].items()
+        system = M.h2_system()
+        tables = M.basis_counts(M.ansatz(), backend, SHOTS, 101,
+                                system.observable)
+        settings, _ = group_terms(system.observable.paulis.to_labels())
+        z_tables = [t for setting, t in zip(settings, tables)
+                    if all(b in ("I", "Z") for b in setting)]
+        self.assertTrue(z_tables, "no setting is measured in the Z basis")
+        outside = sum(n for table in z_tables for b, n in table.items()
                       if b not in M.PHYSICAL_Z_STRINGS)
         self.assertGreater(outside, 0, "no errors to post-select away")
 
     def test_the_noiseless_state_never_leaves_that_subspace(self):
         """Which is what makes the post-selection sound rather than a
         convenient filter."""
-        tables = M.basis_counts(M.ansatz(), AerSimulator(), SHOTS, 101)
-        self.assertEqual(
-            {b for b in tables["Z"]} - set(M.PHYSICAL_Z_STRINGS), set())
+        system = M.h2_system()
+        tables = M.basis_counts(M.ansatz(), AerSimulator(), SHOTS, 101,
+                                system.observable)
+        settings, _ = group_terms(system.observable.paulis.to_labels())
+        for setting, table in zip(settings, tables):
+            if all(b in ("I", "Z") for b in setting):
+                self.assertEqual(set(table) - set(M.PHYSICAL_Z_STRINGS), set())
 
 
 @unittest.skipUnless(HAVE_AER, "needs qiskit-aer")

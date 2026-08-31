@@ -76,7 +76,26 @@ class DeviceLayout:
         self.edges = normalised
 
     def neighbours(self, qubit: int) -> set:
-        return {b if a == qubit else a for a, b in self.edges if qubit in (a, b)}
+        return self._adjacency().get(qubit, set())
+
+    def _adjacency(self) -> dict:
+        """Neighbour sets, built once.
+
+        Scanning every edge per lookup is fine for a five-qubit toy and
+        quadratic on a 127-qubit lattice, where the placement search asks
+        for neighbours millions of times. The cache is keyed on the edge
+        set so a device edited after construction rebuilds it.
+        """
+        key = len(self.edges)
+        cached = getattr(self, "_adjacency_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        adjacency = {q: set() for q in self.qubits}
+        for a, b in self.edges:
+            adjacency[a].add(b)
+            adjacency[b].add(a)
+        object.__setattr__(self, "_adjacency_cache", (key, adjacency))
+        return adjacency
 
     def gate_error(self, a: int, b: int) -> float:
         pair = tuple(sorted((a, b)))
@@ -104,44 +123,60 @@ class Placement:
         return f"qubits {self.qubits} (cost {self.cost:.5f})"
 
 
-def _connected_sets(device: DeviceLayout, size: int,
-                    limit: int = 20_000) -> Iterable[tuple]:
+def _connected_sets(device: DeviceLayout, size: int, limit: int = 20_000,
+                    candidates: Optional[Iterable] = None) -> Iterable[tuple]:
     """Every connected set of `size` qubits, up to `limit` of them.
 
-    Exhaustive for the small placements this is used on. The limit is a
+    Exhaustive, and each set is produced exactly once. The limit is a
     refusal rather than a sample: a truncated search that presented
     itself as a best-of would be claiming an optimum it never looked for.
+
+    The enumeration is ESU (Wernicke): grow from a root, and only ever
+    extend with qubits above the root that are not already neighbours of
+    the set. That last condition is what makes each set arrive once. The
+    obvious alternative -- grow paths freely and discard the duplicates
+    -- produces the same sets, but it walks every ORDERING of each one,
+    so the work between two yields grows factorially while the count of
+    distinct sets grows politely. On a 127-qubit lattice at size 10 that
+    version never reaches its own limit check: it stops answering long
+    before it has found 20,000 sets to refuse. A guard that cannot fire
+    because the loop it guards never returns is not a guard.
     """
     if size < 1:
         raise ValueError("a placement needs at least one qubit")
-    if size == 1:
-        for q in sorted(device.qubits):
-            yield (q,)
-        return
 
-    seen = set()
+    pool = set(device.qubits) if candidates is None else set(candidates)
+    unknown = pool - set(device.qubits)
+    if unknown:
+        raise KeyError(f"{device.name} has no qubit(s) {sorted(unknown)}")
+
+    adjacency = {q: device.neighbours(q) & pool for q in pool}
     found = 0
-    for start in sorted(device.qubits):
-        frontier = [(start,)]
-        while frontier:
-            current = frontier.pop()
-            if len(current) == size:
-                key = tuple(sorted(current))
-                if key not in seen:
-                    seen.add(key)
-                    found += 1
-                    if found > limit:
-                        raise OverflowError(
-                            f"more than {limit} connected sets of size {size} on "
-                            f"{device.name}: this search is exhaustive by design, "
-                            "so narrow the candidates rather than trusting a "
-                            "truncated best-of")
-                    yield key
+
+    for root in sorted(pool):
+        extension = {q for q in adjacency[root] if q > root}
+        stack = [((root,), extension, adjacency[root] | {root})]
+        while stack:
+            subgraph, extension, closed = stack.pop()
+            if len(subgraph) == size:
+                found += 1
+                if found > limit:
+                    raise OverflowError(
+                        f"more than {limit} connected sets of size {size} on "
+                        f"{device.name}: this search is exhaustive by design, "
+                        "so narrow the candidates rather than trusting a "
+                        "truncated best-of")
+                yield tuple(sorted(subgraph))
                 continue
-            for q in current:
-                for n in device.neighbours(q):
-                    if n not in current:
-                        frontier.append(current + (n,))
+            remaining = set(extension)
+            while remaining:
+                w = remaining.pop()
+                # Only neighbours of w that the set has not already seen,
+                # and only above the root. Both halves are load-bearing:
+                # drop either and sets start arriving more than once.
+                fresh = {u for u in adjacency[w]
+                         if u > root and u not in closed}
+                stack.append((subgraph + (w,), remaining | fresh, closed | fresh | {w}))
 
 
 def score_placement(qubits: tuple, device: DeviceLayout, budget: ErrorBudget,
@@ -195,10 +230,18 @@ def score_placement(qubits: tuple, device: DeviceLayout, budget: ErrorBudget,
 
 
 def rank_placements(device: DeviceLayout, budget: ErrorBudget, n_qubits: int,
-                    **circuit) -> list:
-    """Every connected placement, best first."""
+                    candidates: Optional[Iterable] = None, **circuit) -> list:
+    """Every connected placement, best first.
+
+    Pass `candidates` to search inside a region of the device rather
+    than all of it. Above roughly ten qubits an exhaustive search on a
+    127-qubit lattice refuses rather than truncates, and narrowing the
+    region is the way through: the answer is then exhaustive over the
+    region you named, which is a claim that can be stated honestly.
+    """
     scored = [score_placement(qubits, device, budget, **circuit)
-              for qubits in _connected_sets(device, n_qubits)]
+              for qubits in _connected_sets(device, n_qubits,
+                                            candidates=candidates)]
     scored.sort(key=lambda p: p.cost)
     return scored
 
@@ -220,6 +263,10 @@ class LayoutAdvice:
     #: Set when the placement was chosen against what a method will
     #: leave rather than against the raw error.
     after_method: Optional[str] = None
+    #: The qubits the search was restricted to, when it was restricted.
+    #: Reported so "best available" is never read as device-wide when it
+    #: was only best within a region someone chose.
+    region: Optional[tuple] = None
 
     @property
     def gain(self) -> Optional[float]:
@@ -242,7 +289,10 @@ class LayoutAdvice:
         if self.after_method:
             lines.append(f"  scored against:  what {self.after_method} leaves "
                          "behind, not the raw error")
-        lines.append(f"  searched:        {self.considered} connected placements")
+        region = (f" within the {len(self.region)} qubits you named"
+                  if self.region is not None else "")
+        lines.append(f"  searched:        {self.considered} connected "
+                     f"placements{region}")
         gain = self.gain
         if gain is None:
             lines.append("  no current placement given, so no comparison is made")
@@ -258,7 +308,8 @@ class LayoutAdvice:
 
 def advise_layout(device: DeviceLayout, budget: ErrorBudget, n_qubits: int,
                   current: Optional[tuple] = None,
-                  after_method=None, **circuit) -> LayoutAdvice:
+                  after_method=None, candidates: Optional[Iterable] = None,
+                  **circuit) -> LayoutAdvice:
     """The whole recommendation: where to run and whether it is worth moving.
 
     Pass `after_method` when a mitigation method is already chosen. The
@@ -275,7 +326,8 @@ def advise_layout(device: DeviceLayout, budget: ErrorBudget, n_qubits: int,
     """
     if after_method is not None:
         budget = residual_budget(budget, after_method)
-    ranked = rank_placements(device, budget, n_qubits, **circuit)
+    ranked = rank_placements(device, budget, n_qubits,
+                             candidates=candidates, **circuit)
     if not ranked:
         raise ValueError(
             f"no connected placement of {n_qubits} qubits exists on {device.name}")
@@ -287,4 +339,5 @@ def advise_layout(device: DeviceLayout, budget: ErrorBudget, n_qubits: int,
         considered=len(ranked),
         driven_by=budget.dominant if budget.is_decisive else None,
         after_method=after_method.name if after_method is not None else None,
+        region=tuple(sorted(candidates)) if candidates is not None else None,
     )

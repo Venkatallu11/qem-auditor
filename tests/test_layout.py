@@ -5,11 +5,14 @@ answers for different error budgets. A layout chooser that always returns
 the lowest-gate-error pair is the one everybody already has, and on a
 readout-dominated device it is wrong.
 """
+import itertools
+import random
+import time
 import unittest
 
 from qem_auditor import Provenance
-from qem_auditor.layout import (DeviceLayout, QubitProperties, advise_layout,
-                                rank_placements, score_placement)
+from qem_auditor.layout import (DeviceLayout, QubitProperties, _connected_sets,
+                                advise_layout, rank_placements, score_placement)
 from qem_auditor.prescribe import METHODS_BY_NAME, ErrorBudget, ErrorSource
 
 E = ErrorSource
@@ -164,3 +167,72 @@ class AdviceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConnectedSetEnumeration(unittest.TestCase):
+    """The search is exhaustive, so it must produce each set once and only
+    once -- and it must be able to say so before the heat death of the
+    universe. Both halves were broken: the old path-walking version found
+    every set correctly and reached them through every ordering, so on a
+    127-qubit lattice it stopped answering at ten qubits without ever
+    reaching the limit check that was supposed to refuse."""
+
+    def _random_device(self, n, density, seed):
+        rng = random.Random(seed)
+        qubits = {i: QubitProperties(0.01) for i in range(n)}
+        edges = {(a, b): 0.01 for a, b in itertools.combinations(range(n), 2)
+                 if rng.random() < density}
+        return DeviceLayout(qubits, edges)
+
+    def _brute_force(self, device, size):
+        found = set()
+        for candidate in itertools.combinations(sorted(device.qubits), size):
+            members, seen, frontier = set(candidate), {candidate[0]}, [candidate[0]]
+            while frontier:
+                for n in device.neighbours(frontier.pop()) & members:
+                    if n not in seen:
+                        seen.add(n)
+                        frontier.append(n)
+            if seen == members:
+                found.add(candidate)
+        return found
+
+    def test_matches_brute_force_and_never_repeats(self):
+        for seed in range(25):
+            device = self._random_device(7, 0.45, seed)
+            for size in range(1, 8):
+                got = list(_connected_sets(device, size))
+                self.assertEqual(len(got), len(set(got)),
+                                 f"seed {seed} size {size} yielded duplicates")
+                self.assertEqual(set(got), self._brute_force(device, size),
+                                 f"seed {seed} size {size} disagrees with brute force")
+
+    def test_refuses_promptly_instead_of_grinding(self):
+        # A 60-qubit ring has far more than 20 connected 12-sets. The
+        # point is not that it refuses -- it is that it refuses after
+        # bounded work, which the path-walking version could not do.
+        qubits = {i: QubitProperties(0.01) for i in range(60)}
+        edges = {tuple(sorted((i, (i + 1) % 60))): 0.01 for i in range(60)}
+        device = DeviceLayout(qubits, edges)
+        started = time.monotonic()
+        with self.assertRaises(OverflowError):
+            list(_connected_sets(device, 12, limit=20))
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_candidates_restrict_the_search(self):
+        device = toy_device()
+        region = sorted(device.qubits)[:3]
+        for placement in _connected_sets(device, 2, candidates=region):
+            self.assertTrue(set(placement) <= set(region))
+
+    def test_unknown_candidate_is_refused(self):
+        with self.assertRaises(KeyError):
+            list(_connected_sets(toy_device(), 2, candidates=[0, 999]))
+
+    def test_advice_reports_the_region_it_searched(self):
+        device = toy_device()
+        region = sorted(device.qubits)[:3]
+        advice = advise_layout(device, budget({E.READOUT: 30.0}), 2,
+                               candidates=region)
+        self.assertEqual(advice.region, tuple(region))
+        self.assertIn("within the 3 qubits you named", advice.format_advice())
