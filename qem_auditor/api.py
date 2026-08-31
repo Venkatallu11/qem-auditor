@@ -38,6 +38,7 @@ from .power import PowerAnalysis, analyze_experiment
 from .claim import CompiledClaim, compile_claim
 from .failure_modes import FailureAnalysis, classify
 from .planner import CandidateExperiment, candidates_from_audit, next_experiment
+from .memory import Recollection
 from .prescribe import Consult
 from .schema import Experiment, FailureMode
 from .verdict import AuditReport, Verdict, audit as _audit
@@ -59,6 +60,15 @@ class AuditResult:
     """(control, why) the auditor structurally cannot establish from the
     artifacts it was given. Distinguishes 'your method failed this' from
     'nobody could check this from a circuit alone'."""
+
+    recalled: Optional[Recollection] = None
+    """What earlier audits of circuits like this one found.
+
+    Advisory, always. It reorders which checks to run first and warns
+    about what broke last time; it never contributes to the verdict.
+    A circuit resembling three that failed is not thereby failing, and
+    precedent that could convict would make a method that failed once
+    unable to be shown working."""
 
     consult: Optional[Consult] = None
     """What to do about it, when an error budget was supplied.
@@ -105,6 +115,9 @@ class AuditResult:
             parts.append(f"\nUNTESTED ATTACK SURFACE ({len(self.attacks.attacks)}):")
             for a in self.attacks.attacks:
                 parts.append(f"  {a.attack_id}: {a.prediction.statistic}")
+        if self.recalled is not None and not self.recalled.is_empty:
+            parts.append("\nWHAT THIS REMINDS THE AUDITOR OF:")
+            parts.append(self.recalled.format_recollection())
         if self.consult is not None:
             parts.append("\n" + self.consult.format_consult())
         if self.measurements:

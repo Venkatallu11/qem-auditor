@@ -25,6 +25,8 @@ jobs:
       # answer on the suite, which no single-verdict test would catch.
       - run: python run_trust.py
       - run: python run_audit_loop.py
+      # Stdlib only: circuit memory needs no backend.
+      - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
       # Every CLI subcommand, so a broken entry point fails here rather

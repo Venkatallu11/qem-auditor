@@ -15,7 +15,8 @@ from .schema import (
 from .verdict import AuditReport, Verdict, audit
 from .api import AuditResult, Auditor
 from . import (active_design, blind, llm, power, provenance, reconstruct,
-               layout, ledger, prescribe, record, report, trust)
+               layout, ledger, memory, prescribe, record, report,
+               trust)
 from .adversary import AdversarialScientist, Attack, AttackPlan, Prediction
 from .executor import AttackExecutor, AttackReport
 from .reconstruct import FitData, Measurement, Reconstructor
@@ -25,6 +26,8 @@ from .failure_modes import Diagnosis, FailureAnalysis, classify
 from .prescribe import Consult, ErrorBudget, ErrorSource, Prescription, prescribe
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
 from .ledger import EvidenceLedger, Observation
+from .memory import (CaseMemory, CircuitFingerprint, PastCase, Recollection,
+                     case_from_audit, fingerprint_from_spec)
 
 __all__ = [
     "ClaimType", "CircuitSpec", "Controls", "Experiment", "FailureMode",
@@ -35,11 +38,13 @@ __all__ = [
     "AdversarialScientist", "Attack", "AttackPlan", "Prediction",
     "AttackExecutor", "AttackReport",
     "active_design", "blind", "llm", "power", "provenance", "reconstruct",
-    "report", "trust", "prescribe", "layout", "ledger",
+    "report", "trust", "prescribe", "layout", "ledger", "memory",
     "FitData", "Measurement", "Reconstructor",
     "AuditAgent", "Investigation", "LLMAdversary",
     "Diagnosis", "FailureAnalysis", "classify",
     "Consult", "ErrorBudget", "ErrorSource", "Prescription", "prescribe",
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
     "EvidenceLedger", "Observation",
+    "CaseMemory", "CircuitFingerprint", "PastCase", "Recollection",
+    "case_from_audit", "fingerprint_from_spec",
 ]

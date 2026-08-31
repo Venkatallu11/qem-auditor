@@ -573,6 +573,50 @@ should accept.
 python examples/better_next_time.py    # ~15s, needs qiskit-aer
 ```
 
+### What this circuit reminds the auditor of
+
+The ledger remembers how methods *performed*, keyed on where the error
+was. `qem_auditor.memory` remembers what was *found*, keyed on the
+**circuit itself** — so a circuit arriving today is met with "the last
+three things shaped like this failed the compiler check, look there
+first" instead of a fresh start.
+
+Both questions are worth asking. A budget says what will help; a circuit
+says what went wrong last time, which is the better predictor of what
+will go wrong this time — the same ansatz compiled the same way tends to
+break the same way.
+
+Circuits are keyed on **structure, not names**. Two groups call the same
+ansatz different things and one group calls two circuits the same across
+a refactor, so the fingerprint is gate counts, depth, gate alphabet and
+observable shape — weighted towards the things that predict how a circuit
+fails. Recall on the third audit of a family:
+
+```
+  2 similar circuits in memory:
+    h2_ucc_tuesday (98% alike): INVALID -- unitary_equivalence
+    h2_ucc_monday  (96% alike): INVALID -- unitary_equivalence
+  Check these first, they failed most often on circuits like this one:
+    unitary_equivalence: failed 2/2
+  Attacks that earned their keep here before:
+    T_compiler: found something 2/2 times
+```
+
+The expensive check goes first instead of last.
+
+**Memory advises. It never convicts.** A circuit resembling three that
+were `INVALID` is not thereby invalid — the gates decide on this
+circuit's own evidence, and the example ends by auditing a clean circuit
+that memory associates *only* with failures and watching it certify.
+Precedent that could convict would be the worst feature in this package:
+a method that failed once could never be shown working, and an auditor
+would have become a reputation system. It holds by construction rather
+than by care, because the gates are never handed the memory at all.
+
+```bash
+python examples/memory_pays_off.py    # ~1s, no dependencies
+```
+
 The prescription also refuses to prescribe. When shot noise dominates it
 says take more shots and warns that extrapolating first makes that term
 *worse*. When the ansatz cannot represent the answer it recommends no
@@ -902,6 +946,7 @@ qem_auditor/
   prescribe.py      what to do about it: error budget -> ranked advice
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
+  memory.py         what this circuit reminds the auditor of
   adversary.py      generates falsification experiments
   executor.py       runs them; never pretends about what it could not run
   reconstruct.py    the interface that lets it attack your fitting code
@@ -924,8 +969,8 @@ benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   methods.py        9 mitigation methods to be audited, 2 of them frauds
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           10 runnable end-to-end demonstrations
-tests/              597 tests
+examples/           11 runnable end-to-end demonstrations
+tests/              626 tests
 ```
 
 Run it:
@@ -944,6 +989,7 @@ python examples/real_device_audit.py        # the same claim on measured IBM cal
 python examples/method_shootout.py --quick  # 9 methods, 2 noise models, audited
 python examples/prescribe_for_circuit.py    # the fix, prescribed and then checked
 python examples/better_next_time.py         # qubit choice, and the growing corpus
+python examples/memory_pays_off.py          # circuit memory (no dependencies)
 python -m unittest discover -s tests -t .   # full suite
 ```
 
