@@ -291,6 +291,63 @@ def my_auditor(experiment):        # sees the record, never the answer key
 score(my_auditor, CASES, "mine").print_report()
 ```
 
+### A live audit, end to end
+
+Everything above is a record *transcribed* from an experiment someone
+already ran and already understood. `examples/live_h2_audit.py` is the
+other thing: it runs the experiment now and hands the auditor numbers it
+measured itself.
+
+Real chemistry — H2 at 0.735 Å in STO-3G, two qubits, exact ground state
+`-1.857275030 Ha` obtained by diagonalising the Hamiltonian rather than
+from this package, so the verdicts can be checked against truth
+afterwards. Two zero-noise-extrapolation protocols are audited, and the
+auditor is never told which is which:
+
+| | folds | fit | raw → mitigated | improvement |
+|---|---|---|---|---|
+| **A** | 1,3,5 | linear | 21.95 → 3.97 kcal/mol | 5.53x |
+| **B** | 1,3,5,7,9 | quartic | 21.95 → 4.62 kcal/mol | 4.75x |
+
+Read as a results table, both pass and B looks only slightly worse. Both
+also win 8/8 paired trials on "does mitigation help under noise". A
+reviewer would sign off on both.
+
+What the auditor did instead — running the pipelines itself, not reading
+about them:
+
+- **On B's noiseless control it measured 20.0x error amplification.** With
+  no physical noise to correct, that is the quartic fit amplifying shot
+  noise. Nobody told it B was the aggressive one; it found the
+  ill-conditioning by executing the pipeline against an exact model.
+- **It ran the held-out check in the direction production uses** —
+  hold out the lowest fold, fit only the ones above it, predict downward
+  — with the tolerance set to the error each protocol claims. A costs
+  5.12 kcal/mol to predict a fold it *did* measure, against the 3.97 it
+  claims for the answer it didn't. B costs 8.15 against 4.62. Both fail.
+- **B's spread and tail failed too**: 1/8 trials catastrophic, replicates
+  disagreeing by 4.03 kcal/mol.
+
+Both land `INVALID`, and A is the interesting one: it is the sober
+protocol, it passes the noiseless control at a benign 1.9x, its
+replicates are tight — and its extrapolation still cannot predict a
+held-out point as accurately as it claims to predict the answer. That is
+a real finding about a real run, not a fixture.
+
+```bash
+python examples/live_h2_audit.py    # ~13s, needs qiskit-aer
+```
+
+**This run also found a bug in the auditor.** The gates separate "failed"
+from "never run" with `is False`, which is exact — and `numpy.bool_` is
+*equal* to `False` without *being* it. So
+`extrapolation_in_domain = error <= tolerance`, the most natural line
+anyone doing quantum work would write, stored a value that read as *not
+recorded*. A measured failure disappeared and the verdict softened from
+`INVALID` to `NOT ESTABLISHED` with nothing to show it had happened.
+Control values are now normalised at the boundary, and anything
+ambiguous — `1`, `0.0`, `"no"` — is refused rather than guessed at.
+
 ---
 
 ## The loop
@@ -620,8 +677,8 @@ qem_auditor/
 benchmarks/         6 real QEM-Trust cases
   suite.py          the same cases, scoreable by any auditor
   constructed.py    6 minimal pairs: one difference, opposite verdicts
-examples/           5 runnable end-to-end demonstrations
-tests/              488 tests
+examples/           6 runnable end-to-end demonstrations
+tests/              496 tests
 ```
 
 Run it:
@@ -635,6 +692,7 @@ python examples/verify_zne_claim.py         # end-to-end verification (qiskit)
 python examples/adversarial_loop.py         # propose, execute, judge (qiskit)
 python examples/autonomous_audit.py         # the agent, unattended (qiskit)
 python examples/check_under_noise.py        # noiseless vs noisy (qiskit-aer)
+python examples/live_h2_audit.py            # a real H2 run, audited live (qiskit-aer)
 python -m unittest discover -s tests -t .   # full suite
 ```
 

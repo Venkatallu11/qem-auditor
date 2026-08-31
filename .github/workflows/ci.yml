@@ -66,6 +66,9 @@ jobs:
       - run: python examples/attack_a_pipeline.py
       - run: python examples/autonomous_audit.py
       - run: python examples/check_under_noise.py
+      # A live end-to-end audit: real molecule, real noise, real mitigation,
+      # numbers the auditor measured itself rather than any record on disk.
+      - run: python examples/live_h2_audit.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py
