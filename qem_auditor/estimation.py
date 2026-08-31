@@ -148,3 +148,41 @@ def expectation(counts_by_setting: list, operator: Any,
         qubits = [q for q, b in enumerate(bases) if b != "I"]
         total += float(coefficient.real) * parity(counts_by_setting[index], qubits)
     return total
+
+
+def predicate_expectation(counts: dict, predicate: Any,
+                          decode: Optional[Any] = None) -> float:
+    """Probability that a shot satisfies `predicate`, from one Z-basis table.
+
+    The observable that matters for an oracle, a Grover search or any
+    algorithm whose answer is "did we land in the right set" is the
+    indicator function of that set. It is diagonal, so a single Z-basis
+    setting measures it exactly -- but it has no useful Pauli expansion:
+    the 1097-state marked set of the first outside circuit brought here
+    would need thousands of terms to write as a sum of Pauli Zs, and
+    `expectation` would dutifully estimate every one of them.
+
+    So this takes the classical function directly. One setting, any
+    width, exact in the shot-noise limit. `decode` turns a bitstring
+    into whatever the predicate wants to see -- a coordinate pair, an
+    integer -- and defaults to the integer the bitstring spells,
+    little-endian, matching `evaluate` in `qem_auditor.reversible`.
+
+    Counts with negative weights are accepted, because readout
+    mitigation produces them: inverting a confusion matrix can push a
+    quasi-probability below zero, and clipping those to zero here would
+    silently bias the result back toward the unmitigated value -- which
+    would make mitigation look like it did less than it did.
+    """
+    shots = sum(counts.values())
+    if shots == 0:
+        raise EstimationError(
+            "no surviving shots: this estimator has no data to average")
+    if decode is None:
+        def decode(bits):
+            return int(bits[::-1], 2)
+    hits = 0.0
+    for bits, n in counts.items():
+        if predicate(decode(bits)):
+            hits += n
+    return hits / shots

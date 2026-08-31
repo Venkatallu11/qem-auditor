@@ -25,6 +25,8 @@ from .llm_scientist import LLMAdversary
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 from .prescribe import Consult, ErrorBudget, ErrorSource, Prescription, prescribe
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
+from .reversible import (Discrepancy, NotReversible, OracleReport, audit_oracle,
+                         evaluate)
 from .ledger import EvidenceLedger, Observation
 from .memory import (CaseMemory, CircuitFingerprint, PastCase, Recollection,
                      case_from_audit, fingerprint_from_spec)
@@ -46,6 +48,7 @@ __all__ = [
     "Diagnosis", "FailureAnalysis", "classify",
     "Consult", "ErrorBudget", "ErrorSource", "Prescription", "prescribe",
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
+    "Discrepancy", "NotReversible", "OracleReport", "audit_oracle", "evaluate",
     "EvidenceLedger", "Observation",
     "CaseMemory", "CircuitFingerprint", "PastCase", "Recollection",
     "case_from_audit", "fingerprint_from_spec", "Store",
