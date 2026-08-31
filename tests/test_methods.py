@@ -200,3 +200,68 @@ class LayeringTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
+class TensoredReadoutMitigationTest(unittest.TestCase):
+    """Readout mitigation that survives past six qubits.
+
+    Full calibration needs 2**n preparation circuits, so it refuses at
+    seven. The 18-qubit oracle that motivated this would have needed
+    262,144 of them; the tensored form needs two, at any width. The
+    price is an assumption -- that readout errors factorise -- and these
+    tests pin both halves: that it tracks full REM where both run, and
+    that it is registered as its own method rather than as full REM.
+    """
+
+    def backend(self):
+        from qiskit_aer import AerSimulator
+        from qiskit_aer.noise import NoiseModel, ReadoutError, depolarizing_error
+        noise = NoiseModel()
+        noise.add_all_qubit_quantum_error(depolarizing_error(0.002, 2), ["cx"])
+        noise.add_all_qubit_readout_error(ReadoutError([[0.94, 0.06], [0.08, 0.92]]))
+        return AerSimulator(noise_model=noise)
+
+    def test_it_recovers_most_of_what_full_rem_recovers(self):
+        backend = self.backend()
+        system = M.h2_system()
+        raw, full, tensored = [], [], []
+        for seed in (11, 22, 33):
+            raw.append(abs(M.unmitigated(M.Sampler(backend, 20_000, seed)) - system.exact))
+            full.append(abs(M.readout_mitigation(M.Sampler(backend, 20_000, seed))
+                            - system.exact))
+            tensored.append(abs(M.tensored_readout_mitigation(
+                M.Sampler(backend, 20_000, seed)) - system.exact))
+        median = lambda xs: sorted(xs)[len(xs) // 2]
+        self.assertLess(median(tensored), median(raw) / 2,
+                        "tensored REM should recover most of a readout-dominated error")
+        # It discards correlations, so it is allowed to be worse than full
+        # REM -- but not by a factor that would make it a different answer.
+        self.assertLess(median(tensored), median(full) * 3)
+
+    def test_it_is_registered_under_its_own_name(self):
+        """Presenting a factorised estimator as full REM would be exactly
+        the kind of unstated assumption this package audits for."""
+        self.assertIn("REM (tensored)", M.METHODS)
+        self.assertIsNot(M.METHODS["REM (tensored)"], M.METHODS["REM (readout)"])
+
+    def test_full_rem_still_refuses_the_width_it_cannot_afford(self):
+        with self.assertRaises(ValueError):
+            M._confusion_matrix(_WideSampler(M.MAX_REM_QUBITS + 1), shots=10)
+
+    def test_the_tensored_ceiling_is_set_by_the_dense_vector_not_the_circuits(self):
+        with self.assertRaises(ValueError) as caught:
+            M._tensored_confusion(_WideSampler(M.MAX_TENSORED_QUBITS + 1), shots=10)
+        self.assertIn("sparse", str(caught.exception))
+        self.assertGreater(M.MAX_TENSORED_QUBITS, M.MAX_REM_QUBITS)
+
+
+class _WideSampler:
+    """Just wide enough to trip a width guard, with nothing behind it.
+
+    Only ever constructed inside a test that already requires qiskit.
+    """
+
+    def __init__(self, n_qubits):
+        from qiskit import QuantumCircuit
+        self.circuit = QuantumCircuit(n_qubits)

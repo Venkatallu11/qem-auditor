@@ -558,6 +558,74 @@ quietly stopped looking would be claiming an optimum it never found.
 Pass `candidates=` to narrow to a region; the answer is then exhaustive
 over the region you named, and the report says which region that was.
 
+### Before mitigation: is it the circuit you said it was?
+
+An 18-qubit phase oracle arrived from outside this project — a 64x64 logo
+bitmap, a specification naming 1097 marked pixels, a depth target of 726,
+and a submission file asserting `"verified": true`. Three findings, in
+the order they have to come:
+
+1. **It did not parse.** `mcx` and `mcz` are not OPENQASM 2.0 gates and
+   are not in `qelib1.inc`.
+2. **It did not compute its specification.** Shimmed so it would run, it
+   marked **1 of 4096** basis states — the wrong one — and left its
+   ancillas entangled with the input on *every* input, so it was not a
+   phase oracle at all.
+3. **Only then is mitigation a question**, and the answer is no.
+
+`qem_auditor.reversible` is the check that was missing. An oracle, an
+arithmetic block, a reversible subroutine — the parts of a program most
+likely to carry a written specification — are built from gates that only
+permute basis states and add phases. So they can be evaluated one basis
+state at a time, tracking a bitstring and a sign: 4096 cheap evaluations
+instead of 262,144 amplitudes. Exhaustive, exact, and cheap enough to be
+mandatory.
+
+```
+inputs checked:   4096 (exhaustive, exact)
+specification:    1097 marked
+circuit marks:    1
+ancillas not restored: 4096 of 4096 (100.0%)
+-> the circuit does NOT implement its specification
+```
+
+The report never quotes accuracy alone. That circuit scores **73.2%**,
+and so does one that does nothing at all, because the specification marks
+a quarter of the space.
+
+**What correct costs.** Cutting the marked set into 17 disjoint
+rectangles and then 111 disjoint cubes gives an ancilla-free oracle —
+one multi-controlled Z per cube, nothing to uncompute, verified on all
+4096 inputs:
+
+| | depth | 2-qubit gates | marks |
+|---|---|---|---|
+| as uploaded | 591 | 465 | 1 of 1097 |
+| claimed target | 726 | 2,200 | — |
+| correct, same 18-qubit width | 7,060 | 5,898 | **1097** |
+
+**The depth target was met by not implementing the function.**
+
+And then `feasibility` refuses to rank methods for it. On `fake_kyiv`,
+5,898 two-qubit gates at 0.31% error survive one shot in 10⁸:
+
+```
+-> no method mitigates this: about 2e+17 shots to see the signal at all.
+   Getting under 1305 two-qubit gates is the prerequisite, and it is a
+   compilation problem, not a mitigation one.
+```
+
+Two smaller gaps the same circuit exposed, both now closed: **predicate
+observables** (`predicate_expectation`), because "did we land in the
+marked set" is diagonal and measurable in one setting but has no useful
+Pauli expansion at 1097 states; and **tensored readout mitigation**,
+because full REM needs 2ⁿ calibration circuits and refuses at seven
+qubits — 262,144 of them here, against two at any width. It is
+registered under its own name, not as full REM made cheaper: it assumes
+readout errors factorise, which discards exactly the crosstalk between
+neighbouring resonators. Measured on `fake_kyiv`, it recovers 4.92
+against full REM's 4.76 kcal/mol.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1128,6 +1196,7 @@ qem_auditor/
   failure_modes.py  why it failed, and the cheapest fix
   prescribe.py      what to do about it: error budget -> ranked advice
   estimation.py     measuring any Pauli observable, not just ours
+  reversible.py     does the circuit compute what its author said?
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
   memory.py         what this circuit reminds the auditor of

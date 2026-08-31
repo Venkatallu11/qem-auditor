@@ -446,6 +446,92 @@ def _apply_readout_correction(table: dict, inverse: np.ndarray) -> dict:
             for i in range(size)}
 
 
+#: Tensored calibration is linear in width, so the ceiling is set by the
+#: dense probability vector the correction is applied to, not by the
+#: number of calibration circuits (which is always two).
+MAX_TENSORED_QUBITS = 24
+
+
+def _tensored_confusion(sampler: Sampler, shots: int) -> list:
+    """Per-qubit 2x2 readout confusion, from exactly two circuits.
+
+    Full calibration needs 2**n preparations and stops being a method
+    anyone runs at about six qubits. The 18-qubit oracle that motivated
+    this would have needed 262,144 of them. Preparing all-zeros and
+    all-ones and reading each qubit's marginal needs two, at every width.
+
+    The price is an assumption, and it is a real one: that readout errors
+    factorise across qubits. They do not, entirely -- crosstalk between
+    neighbouring readout resonators is exactly the correlated part this
+    throws away. So this is a DIFFERENT method from full REM with weaker
+    guarantees, not full REM made cheaper, and it is registered under its
+    own name so a report can never present one as the other.
+    """
+    n_qubits = sampler.circuit.num_qubits
+    if n_qubits > MAX_TENSORED_QUBITS:
+        raise ValueError(
+            f"correcting {n_qubits} qubits means a dense vector of "
+            f"2**{n_qubits} entries. Past {MAX_TENSORED_QUBITS} that needs a "
+            "sparse estimator such as M3, which is again a different method.")
+    matrices = []
+    marginals = []
+    for prepared in (0, 1):
+        prep = QuantumCircuit(n_qubits)
+        if prepared:
+            prep.x(range(n_qubits))
+        table = sampler.measure_in(prep, ("Z",) * n_qubits, shots=shots,
+                                   seed_offset=300 + prepared, calibration=True)
+        total = sum(table.values())
+        ones = np.zeros(n_qubits)
+        for bits, n in table.items():
+            for qubit, bit in enumerate(bits):
+                if bit == "1":
+                    ones[qubit] += n
+        marginals.append(ones / total)
+    for qubit in range(n_qubits):
+        p1_given_0 = marginals[0][qubit]
+        p1_given_1 = marginals[1][qubit]
+        # columns are the prepared value, rows the measured one
+        matrices.append(np.array([[1 - p1_given_0, 1 - p1_given_1],
+                                  [p1_given_0, p1_given_1]]))
+    return matrices
+
+
+def _apply_tensored_correction(table: dict, inverses: list) -> dict:
+    """Apply per-qubit inverses without ever forming their 2**n product.
+
+    The tensor product of eighteen 2x2 matrices is a 262,144-square
+    matrix; contracting them one qubit at a time against the probability
+    vector is the same arithmetic at 2**n * n cost instead of 4**n.
+    """
+    n_qubits = len(inverses)
+    total = sum(table.values())
+    vector = np.zeros(2 ** n_qubits)
+    for bits, n in table.items():
+        vector[int(bits[::-1], 2)] = n / total
+    vector = vector.reshape([2] * n_qubits)
+    for qubit, inverse in enumerate(inverses):
+        # axis for qubit q in a little-endian index is n-1-q
+        axis = n_qubits - 1 - qubit
+        vector = np.moveaxis(np.tensordot(inverse, vector, axes=([1], [axis])),
+                             0, axis)
+    vector = np.clip(vector.reshape(-1), 0.0, None)
+    if vector.sum() <= 0:
+        raise ValueError("readout correction left no probability mass")
+    vector /= vector.sum()
+    return {format(i, f"0{n_qubits}b")[::-1]: vector[i] * total
+            for i in range(2 ** n_qubits) if vector[i] > 0}
+
+
+def tensored_readout_mitigation(sampler: Sampler,
+                                calibration_shots: int = 8_000) -> float:
+    """REM under a factorised readout model: two calibration circuits, any width."""
+    inverses = [np.linalg.pinv(m) for m in _tensored_confusion(sampler, calibration_shots)]
+    tables = sampler(sampler.circuit)
+    return sampler.energy(
+        [_apply_tensored_correction(t, inverses) for t in tables])
+
+
 def readout_mitigation(sampler: Sampler, calibration_shots: int = 8_000) -> float:
     """REM: measure the readout confusion matrix and invert it.
 
@@ -635,6 +721,7 @@ def oracle_peek(sampler: Sampler, blend: float = 0.98) -> float:
 METHODS = {
     "unmitigated": unmitigated,
     "REM (readout)": readout_mitigation,
+    "REM (tensored)": tensored_readout_mitigation,
     "ZNE (fold 1,3,5)": zne,
     "REM + ZNE": rem_then_zne,
     "symmetry verification": symmetry_verification,

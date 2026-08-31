@@ -779,3 +779,101 @@ def budget_from_ablation(measurements: dict,
     return ErrorBudget(contributions=dict(measurements),
                        provenance=Provenance.MEASURED,
                        note=note or "measured by switching each noise source off")
+
+
+@dataclass(frozen=True)
+class Feasibility:
+    """Whether there is a signal left for a method to mitigate.
+
+    Every mitigation method in the catalogue improves an estimate that
+    still exists. None of them creates one. A circuit deep enough that
+    the probability of finishing without an error is 1e-8 does not have a
+    small signal-to-noise problem; it has no signal, and a prescription
+    ranking methods for it would be answering a question that cannot be
+    asked.
+
+    This came from an 18-qubit oracle whose correct implementation needs
+    about 5,900 two-qubit gates. On a device with 0.31% two-qubit error
+    that is a survival probability of 1e-8: a hundred million shots to
+    see one uncorrupted run. The useful output there is not "use CDR", it
+    is "this cannot run, and here is the gate count that would let it".
+    """
+
+    two_qubit_gates: int
+    two_qubit_error: float
+    readout_error: float
+    n_qubits: int
+
+    @property
+    def gate_survival(self) -> float:
+        return (1.0 - self.two_qubit_error) ** self.two_qubit_gates
+
+    @property
+    def readout_survival(self) -> float:
+        return (1.0 - self.readout_error) ** self.n_qubits
+
+    @property
+    def survival(self) -> float:
+        """Probability a shot finishes uncorrupted. Optimistic on purpose:
+        it counts only gate and readout error, ignoring decoherence and
+        crosstalk, so a circuit this call calls hopeless really is."""
+        return self.gate_survival * self.readout_survival
+
+    @property
+    def shots_for_a_signal(self) -> float:
+        """Roughly what it takes to resolve the surviving signal at 3 sigma.
+
+        The surviving fraction sets the effective sample size, so the
+        shots needed grow as 1/survival**2. Quoted to an order of
+        magnitude, which is all it deserves."""
+        return 9.0 / max(self.survival, 1e-300) ** 2
+
+    @property
+    def is_mitigable(self) -> bool:
+        """Below a 1% survival there is no estimate worth correcting.
+
+        The threshold is a judgement, and it is placed where mitigation
+        stops being the binding constraint rather than where it stops
+        working perfectly: at 1% survival a method that halved the
+        remaining error would still leave an answer dominated by the
+        circuit never having finished.
+        """
+        return self.survival >= 0.01
+
+    @property
+    def affordable_two_qubit_gates(self) -> int:
+        """The gate count that would put this back above the threshold."""
+        import math
+        if self.two_qubit_error <= 0:
+            return self.two_qubit_gates
+        budget = math.log(0.01 / max(self.readout_survival, 1e-300))
+        return max(0, int(budget / math.log(1.0 - self.two_qubit_error)))
+
+    def format_verdict(self) -> str:
+        lines = [
+            f"  two-qubit gates:  {self.two_qubit_gates}",
+            f"  survival:         {self.survival:.3g} "
+            f"(gates {self.gate_survival:.3g}, readout {self.readout_survival:.3f})",
+        ]
+        if self.is_mitigable:
+            lines.append("  -> there is a signal here; mitigation is the right question")
+        else:
+            lines.append(
+                f"  -> no method mitigates this: it would take about "
+                f"{self.shots_for_a_signal:.1g} shots to see the signal at all.")
+            lines.append(
+                f"     Getting under {self.affordable_two_qubit_gates} two-qubit "
+                "gates is the prerequisite, and it is a compilation problem, "
+                "not a mitigation one.")
+        return "\n".join(lines)
+
+
+def feasibility(two_qubit_gates: int, calibration: dict,
+                n_qubits: int) -> Feasibility:
+    """Is there a signal left to mitigate? Ask before ranking methods."""
+    return Feasibility(
+        two_qubit_gates=two_qubit_gates,
+        two_qubit_error=calibration.get("ecr_error", calibration.get("cx_error", 0.0)),
+        readout_error=calibration.get("readout_error", 0.0),
+        n_qubits=n_qubits,
+    )

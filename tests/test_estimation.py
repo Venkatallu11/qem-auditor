@@ -19,7 +19,8 @@ except ImportError:  # pragma: no cover - environment dependent
     HAVE_AER = False
 
 from qem_auditor.estimation import (EstimationError, compatible, expectation,
-                                    group_terms, parity, term_bases)
+                                    group_terms, parity, predicate_expectation,
+                                    term_bases)
 
 
 class TermBasisTest(unittest.TestCase):
@@ -154,3 +155,52 @@ class AgainstAStatevectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PredicateObservableTest(unittest.TestCase):
+    """The observable an oracle actually has.
+
+    "Did we land in the marked set" is diagonal, so one Z-basis setting
+    measures it exactly -- but the 1097-state marked set that motivated
+    this has no useful Pauli expansion, and `expectation` would have
+    estimated thousands of terms to compute a fraction.
+    """
+
+    def test_it_counts_the_shots_the_predicate_accepts(self):
+        counts = {"000": 40, "001": 30, "111": 30}
+        self.assertAlmostEqual(
+            predicate_expectation(counts, lambda v: v >= 1), 0.6)
+
+    def test_the_default_decoding_is_little_endian_qubit_order(self):
+        """Position i of a normalised bitstring is qubit i, so '001'
+        means qubit 2 is set and the value is 4, not 1. Getting this
+        backwards is silent and is why it is pinned."""
+        self.assertAlmostEqual(
+            predicate_expectation({"001": 10}, lambda v: v == 4), 1.0)
+        self.assertAlmostEqual(
+            predicate_expectation({"001": 10}, lambda v: v == 1), 0.0)
+
+    def test_a_custom_decoding_is_used_when_given(self):
+        counts = {"01": 30, "11": 70}
+        pairs = predicate_expectation(
+            counts, lambda xy: xy[0] == 1, decode=lambda b: (int(b[0]), int(b[1])))
+        self.assertAlmostEqual(pairs, 0.7)  # only "11" decodes to a first entry of 1
+
+    def test_negative_weights_from_readout_correction_are_kept(self):
+        """Clipping them here would bias the result back toward the
+        unmitigated value, making mitigation look like it did less."""
+        counts = {"0": 110.0, "1": -10.0}
+        self.assertAlmostEqual(predicate_expectation(counts, lambda v: v == 0), 1.1)
+
+    def test_no_shots_is_refused_rather_than_returned_as_zero(self):
+        with self.assertRaises(EstimationError):
+            predicate_expectation({}, lambda v: True)
+
+    def test_it_agrees_with_the_pauli_estimator_where_both_apply(self):
+        """A single-qubit projector onto |1> is (I - Z)/2, so the two
+        routes must give the same number. If they ever disagree, one of
+        the two bit orderings is wrong."""
+        counts = {"1": 700, "0": 300}
+        by_predicate = predicate_expectation(counts, lambda v: v == 1)
+        by_pauli = (1.0 - parity(counts, [0])) / 2
+        self.assertAlmostEqual(by_predicate, by_pauli)

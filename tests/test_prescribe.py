@@ -10,6 +10,7 @@ import unittest
 
 from qem_auditor import Provenance
 from qem_auditor.prescribe import (CATALOGUE, METHODS_BY_NAME, ErrorBudget,
+                                   feasibility,
                                    ErrorSource, Scaling, SCALES_AS,
                                    budget_from_calibration, prescribe)
 
@@ -247,3 +248,49 @@ class CatalogueTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeasibilityTest(unittest.TestCase):
+    """Ask whether there is a signal before ranking methods to improve it.
+
+    Every method in the catalogue improves an estimate that exists. None
+    creates one. Ranking methods for a circuit with 1e-8 survival is a
+    precise answer to a question nobody can ask.
+    """
+
+    EAGLE = {"ecr_error": 0.00311, "readout_error": 0.0293}
+
+    def test_a_shallow_circuit_leaves_something_to_mitigate(self):
+        verdict = feasibility(465, self.EAGLE, n_qubits=18)
+        self.assertTrue(verdict.is_mitigable)
+        self.assertGreater(verdict.survival, 0.1)
+
+    def test_a_deep_circuit_is_refused_rather_than_prescribed_for(self):
+        verdict = feasibility(5898, self.EAGLE, n_qubits=18)
+        self.assertFalse(verdict.is_mitigable)
+        self.assertLess(verdict.survival, 1e-7)
+        self.assertIn("no method mitigates this", verdict.format_verdict())
+
+    def test_it_says_what_gate_count_would_be_affordable(self):
+        """The actionable half. "Too deep" is a complaint; a number is a
+        target, and it names compilation rather than mitigation as the
+        thing that has to change."""
+        verdict = feasibility(5898, self.EAGLE, n_qubits=18)
+        affordable = verdict.affordable_two_qubit_gates
+        self.assertLess(affordable, 5898)
+        self.assertTrue(feasibility(affordable, self.EAGLE, 18).is_mitigable)
+        self.assertFalse(feasibility(affordable + 50, self.EAGLE, 18).is_mitigable)
+
+    def test_the_estimate_is_optimistic_on_purpose(self):
+        """It counts gate and readout error only. A circuit this call
+        declares hopeless is hopeless by a margin, since decoherence and
+        crosstalk can only lower the number further."""
+        verdict = feasibility(1000, self.EAGLE, n_qubits=18)
+        self.assertAlmostEqual(verdict.survival,
+                               verdict.gate_survival * verdict.readout_survival)
+
+    def test_shots_needed_grows_as_the_inverse_square_of_survival(self):
+        a = feasibility(1000, self.EAGLE, 18)
+        b = feasibility(2000, self.EAGLE, 18)
+        self.assertGreater(b.shots_for_a_signal, a.shots_for_a_signal)
+        self.assertAlmostEqual(a.shots_for_a_signal * a.survival ** 2, 9.0)
