@@ -617,6 +617,58 @@ than by care, because the gates are never handed the memory at all.
 python examples/memory_pays_off.py    # ~1s, no dependencies
 ```
 
+### All of it, from one command
+
+The above were four capabilities and, for a while, four *libraries*:
+`AuditResult.consult` and `.recalled` were never populated by anything,
+the CLI had no way to ask, and nothing persisted. Someone running
+`qem-auditor audit` got a verdict and none of the guidance.
+
+Now the verdict arrives with its context and its remedy:
+
+```bash
+qem-auditor audit run.json --calibration device.json
+```
+
+```
+NOT ESTABLISHED (1)
+  - ideal_control: ideal/noiseless control did NOT recover a sane result
+
+WHAT THIS REMINDS THE AUDITOR OF
+  This exact circuit structure has been audited before:
+    monday_run: INVALID -- failed: ideal_control
+  Check these first: ideal_control failed 1/1
+  Memory advises. The gates still decide this circuit on its own evidence.
+
+WHAT TO DO ABOUT IT
+  READOUT  82.8%  |  GATE_STOCHASTIC 10.0%  |  SHOT_NOISE 7.2%
+  -> Clifford data regression (CDR), reaches 93% of the error here
+  x  zero-noise extrapolation (ZNE): READOUT is unchanged by folding --
+     extrapolation cannot reach it
+```
+
+Without `--calibration` it says so rather than going quiet, because an
+error budget is not something it can invent:
+
+```
+NO REMEDY OFFERED
+  No error budget was supplied, and one is not something this can
+  invent. Pass --calibration with your device's published error rates
+  and your own gate counts, and the verdict comes back with what to do.
+```
+
+`qem-auditor remember` shows what the corpus holds, and
+`remember --circuit run.json` recalls against one circuit. A corpus that
+silently steers recommendations and cannot be read is the thing this
+package refuses everywhere else.
+
+**The library is quiet; the command accumulates.** Importing a package
+should not start writing files in someone's home directory, so
+`Auditor()` learns nothing across calls unless handed a `Store`. The CLI
+does open one — a tool that forgets between invocations is not much of a
+tool — and prints where, the first time it creates anything.
+`--no-store` opts out, `--store DIR` or `$QEM_AUDITOR_STORE` moves it.
+
 The prescription also refuses to prescribe. When shot noise dominates it
 says take more shots and warns that extrapolating first makes that term
 *worse*. When the ansatz cannot represent the answer it recommends no
@@ -947,6 +999,7 @@ qem_auditor/
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
   memory.py         what this circuit reminds the auditor of
+  store.py          where an auditor keeps what it has learned
   adversary.py      generates falsification experiments
   executor.py       runs them; never pretends about what it could not run
   reconstruct.py    the interface that lets it attack your fitting code
@@ -970,7 +1023,7 @@ benchmarks/         6 real QEM-Trust cases
   methods.py        9 mitigation methods to be audited, 2 of them frauds
   constructed.py    6 minimal pairs: one difference, opposite verdicts
 examples/           11 runnable end-to-end demonstrations
-tests/              626 tests
+tests/              650 tests
 ```
 
 Run it:

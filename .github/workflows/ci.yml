@@ -29,6 +29,16 @@ jobs:
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
+      # The wiring, exercised as a user meets it: a verdict arrives with a
+      # remedy, and a second audit remembers the first.
+      - run: |
+          set +e
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor audit /tmp/t.json > /tmp/a1.txt
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor audit /tmp/t.json > /tmp/a2.txt
+          set -e
+          grep -q "NO REMEDY OFFERED" /tmp/a1.txt
+          grep -q "WHAT THIS REMINDS THE AUDITOR OF" /tmp/a2.txt
+          QEM_AUDITOR_STORE=/tmp/qemstore qem-auditor remember | grep -q "remembered"
       # Every CLI subcommand, so a broken entry point fails here rather
       # than for whoever runs it. `audit` and `attack` exit non-zero by
       # design on an unproven record, so the exit CODE is what gets

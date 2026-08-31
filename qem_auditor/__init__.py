@@ -16,7 +16,7 @@ from .verdict import AuditReport, Verdict, audit
 from .api import AuditResult, Auditor
 from . import (active_design, blind, llm, power, provenance, reconstruct,
                layout, ledger, memory, prescribe, record, report,
-               trust)
+               store, trust)
 from .adversary import AdversarialScientist, Attack, AttackPlan, Prediction
 from .executor import AttackExecutor, AttackReport
 from .reconstruct import FitData, Measurement, Reconstructor
@@ -28,6 +28,7 @@ from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
 from .ledger import EvidenceLedger, Observation
 from .memory import (CaseMemory, CircuitFingerprint, PastCase, Recollection,
                      case_from_audit, fingerprint_from_spec)
+from .store import Store
 
 __all__ = [
     "ClaimType", "CircuitSpec", "Controls", "Experiment", "FailureMode",
@@ -38,7 +39,7 @@ __all__ = [
     "AdversarialScientist", "Attack", "AttackPlan", "Prediction",
     "AttackExecutor", "AttackReport",
     "active_design", "blind", "llm", "power", "provenance", "reconstruct",
-    "report", "trust", "prescribe", "layout", "ledger", "memory",
+    "report", "trust", "prescribe", "layout", "ledger", "memory", "store",
     "FitData", "Measurement", "Reconstructor",
     "AuditAgent", "Investigation", "LLMAdversary",
     "Diagnosis", "FailureAnalysis", "classify",
@@ -46,5 +47,5 @@ __all__ = [
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
     "EvidenceLedger", "Observation",
     "CaseMemory", "CircuitFingerprint", "PastCase", "Recollection",
-    "case_from_audit", "fingerprint_from_spec",
+    "case_from_audit", "fingerprint_from_spec", "Store",
 ]
