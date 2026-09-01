@@ -103,6 +103,9 @@ jobs:
       # A circuit from outside this project, with a specification attached:
       # the correctness gate that has to pass before mitigation is a question.
       - run: python examples/audit_an_oracle.py
+      # The control experiment, ported from quantum-verifier, plus the two
+      # bars that say which of its numbers are findings.
+      - run: python examples/control_experiment.py
       # The front door: the starting point we hand people must actually run.
       - run: |
           qem-auditor check --template > /tmp/c.py
