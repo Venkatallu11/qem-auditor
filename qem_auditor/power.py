@@ -421,3 +421,141 @@ def may_stop_early(values: list[float], threshold: float, total_looks: int,
                       f"established at n={n}")
     return False, (f"z={z:.2f} is below the look-{n}/{total_looks} bound {z_bound:.2f}; "
                    f"stopping here would use a nominal alpha that ignored the earlier looks")
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """Whether two methods can be told apart by the runs that were done.
+
+    The shootout ranks methods by median error and prints them in order,
+    which invites the reader to believe the order. On the measured device
+    REM+ZNE came in at 1.15 and CDR at 1.29 kcal/mol, with spreads of
+    1.35 and 0.79 -- a gap of 0.14 between two numbers that move by ten
+    times that between seeds. Printing them one above the other asserts
+    something the data does not support, and it is the same over-claiming
+    this package objects to everywhere else.
+
+    So a ranking now carries the question "could this have come out the
+    other way", and when the answer is yes it says so and says what it
+    would take to settle it.
+    """
+
+    name_a: str
+    name_b: str
+    mean_a: float
+    mean_b: float
+    sigma: float
+    n: int
+    alpha: float = 0.05
+    beta: float = 0.20
+
+    @property
+    def gap(self) -> float:
+        return abs(self.mean_a - self.mean_b)
+
+    @property
+    def standard_error(self) -> float:
+        """Of the DIFFERENCE, which is where the factor of two lives.
+
+        Each mean carries sigma/sqrt(n) and the difference carries both,
+        so the separation a comparison needs is sqrt(2) wider than the
+        one a single mean needs. Forgetting that is how two methods get
+        declared distinguishable on half the runs it would really take.
+        """
+        return self.sigma * math.sqrt(2.0 / self.n) if self.n else float("inf")
+
+    @property
+    def separation(self) -> float:
+        """The gap in standard errors of the difference."""
+        error = self.standard_error
+        return self.gap / error if error > 0 else float("inf")
+
+    @property
+    def distinguishable(self) -> bool:
+        return self.separation >= normal_quantile(1 - self.alpha / 2)
+
+    @property
+    def better(self) -> Optional[str]:
+        """The winner, or None when the runs cannot name one.
+
+        Returning None rather than the nominal leader is the point: a
+        caller that wants a ranking has to decide what to do about a tie
+        instead of being handed one silently.
+        """
+        if not self.distinguishable:
+            return None
+        return self.name_a if self.mean_a < self.mean_b else self.name_b
+
+    @property
+    def required_n(self) -> Optional[int]:
+        """Runs per method needed to resolve this gap, if it is real.
+
+        None when the observed gap is zero -- no finite number of runs
+        establishes that two methods are identical, and quoting one would
+        promise something unachievable.
+        """
+        if self.gap <= 0:
+            return None
+        z = normal_quantile(1 - self.alpha / 2) + normal_quantile(1 - self.beta)
+        return math.ceil(2.0 * (z * self.sigma / self.gap) ** 2)
+
+    def describe(self) -> str:
+        if self.distinguishable:
+            return (f"{self.better} is better: {self.gap:.4g} apart, "
+                    f"{self.separation:.1f} standard errors at n={self.n}")
+        needed = self.required_n
+        tail = ("the observed gap is zero, and no number of runs establishes "
+                "that two methods are identical"
+                if needed is None else
+                f"about {needed} runs each would settle it (n={self.n} now)")
+        return (f"{self.name_a} and {self.name_b} are not distinguishable: "
+                f"{self.gap:.4g} apart against a spread of {self.sigma:.4g}; "
+                f"{tail}")
+
+
+def compare(name_a: str, values_a: list[float], name_b: str, values_b: list[float],
+            confidence: float = 0.95, beta: float = 0.20,
+            conservative: bool = True) -> Comparison:
+    """Can these two sets of runs tell their methods apart?
+
+    The spread is pooled across both methods, because the question is
+    about the difference and both sides contribute noise to it. As in
+    `mean_interval`, the pooled sigma is by default the upper confidence
+    bound rather than the point estimate: with four or eight seeds the
+    spread is barely known either, and an interval that pretends
+    otherwise declares ties resolved that are not.
+    """
+    if len(values_a) != len(values_b):
+        raise PowerError(
+            f"comparing {len(values_a)} runs against {len(values_b)}: this "
+            "assumes equal run counts, and silently using the smaller would "
+            "overstate what the larger set bought")
+    n = len(values_a)
+    if n < 2:
+        raise PowerError(f"need at least 2 runs per method, got {n}")
+    pooled = [v - mean(values_a) for v in values_a] + [v - mean(values_b) for v in values_b]
+    sigma = (sigma_upper_bound(pooled, confidence) if conservative else stdev(pooled))
+    return Comparison(name_a=name_a, name_b=name_b,
+                      mean_a=mean(values_a), mean_b=mean(values_b),
+                      sigma=sigma, n=n, alpha=1 - confidence, beta=beta)
+
+
+def rank_with_ties(results: dict, confidence: float = 0.95,
+                   conservative: bool = True) -> list:
+    """Order methods best-first, grouping the ones that cannot be separated.
+
+    Returns a list of tiers; each tier is a list of names the runs cannot
+    tell apart from the tier's leader. A single-method tier is a claim the
+    data supports. A tier of three is the honest form of what a ranked
+    list of three would have asserted.
+    """
+    ordered = sorted(results.items(), key=lambda kv: mean(kv[1]))
+    tiers: list = []
+    for name, values in ordered:
+        if tiers and not compare(tiers[-1][0], results[tiers[-1][0]], name, values,
+                                 confidence=confidence,
+                                 conservative=conservative).distinguishable:
+            tiers[-1].append(name)
+        else:
+            tiers.append([name])
+    return tiers

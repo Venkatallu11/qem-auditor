@@ -46,6 +46,7 @@ from benchmarks.methods import (FITTING_METHODS, METHODS, FCI,  # noqa: E402
                                 heldout_ok, is_deterministic, scramble_shift,
                                 unmitigated)
 
+from qem_auditor.power import compare, rank_with_ties  # noqa: E402
 from qem_auditor import (CircuitSpec, ClaimType, Controls, Experiment,  # noqa: E402
                          NoiseSpec, Outputs, Provenance, Replicate,
                          ReplicateKind, TranspilationStatus,
@@ -66,6 +67,10 @@ SENSITIVITY_SEEDS = SEEDS[:2] if QUICK else ALL_SEEDS[:4]
 #: 0.82 and 1.12; the fraud sits at 0.02. The bar is placed in the empty
 #: middle rather than tuned against either side.
 SENSITIVITY_FLOOR = 0.5
+
+#: The method whose whole purpose is to be caught. Named once so the
+#: summary can ask which real methods accuracy fails to separate it from.
+FRAUD = "oracle peek (fraud)"
 
 
 def errors_for(method, backend) -> list:
@@ -151,6 +156,7 @@ def main() -> int:
           f"{'  (--quick)' if QUICK else ''}\n")
 
     table = {}
+    fraud_ties = {}
     for label, noise, source in models:
         backend = AerSimulator(noise_model=noise)
         baseline = errors_for(unmitigated, backend)
@@ -168,6 +174,7 @@ def main() -> int:
         print("  " + "-" * 74)
 
         rows = []
+        samples = {}
         for name, method in METHODS.items():
             errors = errors_for(method, backend)
             sensitivity = data_sensitivity(method, backend, SHOTS,
@@ -190,22 +197,47 @@ def main() -> int:
             rows.append((name, statistics.median(errors),
                          statistics.median(baseline) / statistics.median(errors),
                          sensitivity, verdict))
+            samples[name] = errors
 
         for name, error, gain, sensitivity, verdict in sorted(rows, key=lambda r: r[1]):
             flag = "" if sensitivity >= SENSITIVITY_FLOOR else "  <-- not reading the data"
             print(f"  {name:27s} {error:9.3f} {gain:6.2f}x {sensitivity:7.3f}  "
                   f"{verdict.value}{flag}")
+        # A printed order invites the reader to believe the order. Say
+        # which parts of it the runs actually establish, and which are
+        # the same number twice.
+        tiers = rank_with_ties(samples)
+        ties = [tier for tier in tiers if len(tier) > 1]
+        if ties:
+            print()
+            print("  not separated by these runs:")
+            for tier in ties:
+                pair = compare(tier[0], samples[tier[0]], tier[1], samples[tier[1]])
+                print(f"    {' = '.join(tier)}")
+                print(f"      {pair.describe()}")
         table[label] = rows
+        fraud_ties[label] = [tier for tier in ties if FRAUD in tier]
         print()
 
     print("=" * 78)
     print("  Ranked on accuracy alone, the fraud wins both tables.")
+    print("  Worse than that: on the measured device accuracy cannot separate")
+    print("  it from the best real method at all -- the two sit inside each")
+    print("  other's noise, and whichever printed first did so by luck.")
     for label, rows in table.items():
         best = min(rows, key=lambda r: r[1])
         best_certifiable = min(
             (r for r in rows if r[4] is not Verdict.INVALID), key=lambda r: r[1])
         print(f"    {label:24s} lowest error: {best[0]}")
         print(f"    {'':24s} not refused : {best_certifiable[0]}")
+        for tier in fraud_ties.get(label, ()):
+            others = [name for name in tier if name != FRAUD]
+            print(f"    {'':24s} indistinguishable from the fraud on accuracy: "
+                  f"{', '.join(others)}")
+    print()
+    print("  The sensitivity column is what separates them, and it is not close:")
+    print("  the fraud scores 0.020 against 0.6-1.1 for everything real. An")
+    print("  auditor that ranked on accuracy would have nothing to say here.")
     print("=" * 78)
     return 0
 

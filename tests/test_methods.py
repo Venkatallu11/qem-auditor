@@ -265,3 +265,25 @@ class _WideSampler:
     def __init__(self, n_qubits):
         from qiskit import QuantumCircuit
         self.circuit = QuantumCircuit(n_qubits)
+
+
+@unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
+class TensoredIsNotWorseThanFullRemTest(unittest.TestCase):
+    """What the runs support about the cheap method, and no more.
+
+    An earlier README draft quoted one seed -- 4.92 against 4.76 -- which
+    reads as "tensored is slightly worse". Over six seeds the means are
+    0.05 apart against a spread of 1.69, which supports "not measurably
+    different", not "a little worse". Pinned because the tempting claim
+    is the one that overstates.
+    """
+
+    def test_the_two_are_not_distinguishable_on_this_device(self):
+        from qem_auditor.power import compare
+        backend = AerSimulator(noise_model=device_noise(calibration()))
+        seeds = (101, 202, 303, 404)
+        full = [abs(M.readout_mitigation(M.Sampler(backend, 20_000, s)) - M.FCI)
+                for s in seeds]
+        tensored = [abs(M.tensored_readout_mitigation(M.Sampler(backend, 20_000, s))
+                        - M.FCI) for s in seeds]
+        self.assertFalse(compare("full", full, "tensored", tensored).distinguishable)
