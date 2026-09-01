@@ -715,6 +715,61 @@ of the *same wrong circuit* agree with each other, so the disagreement
 that pipeline looks for never appears. `SKIP` is deliberately not `GO` —
 "this check does not apply" must not read as "this circuit passed".
 
+### The decision layer, and a live service
+
+Everything needed to answer *"which method should I use"* was here, and
+it was here as an **example**. A person with a circuit had to read
+`method_shootout.py` and assemble the judgement themselves — which is
+the work this project exists to remove.
+
+`qem_auditor.engine.recommend` is that judgement, and it is mostly made
+of refusals:
+
+- **No surviving signal → no recommendation.** Ranking methods for an
+  experiment that cannot run is a precise answer to a question nobody
+  can ask.
+- **A method that does not read its data is disqualified**, however
+  accurate. It has to be: the deliberate fraud is not distinguishable
+  from the best real method on accuracy.
+- **A method never attacked is not assumed honest.** An unrun control is
+  not a pass, the same rule every other gate here applies.
+- **Methods the runs cannot separate come back as a tier, not an order.**
+
+And one positive rule, which is the point of admitting the tie: **when
+accuracy cannot separate methods, cost decides.** Ranking a statistical
+tie by median ranks noise; ranking it by shot cost ranks something real.
+
+```
+use: CDR
+  error 1.018, cost 10x
+  because: it is in the best tier the runs can establish, it reads its
+  data (sensitivity 1.08), and at 10x it is the cheapest of a group that
+  cannot be separated on accuracy
+statistically tied with: REM + ZNE
+  -- cost decided, not accuracy
+disqualified for not reading their own data: oracle peek (fraud)
+```
+
+`mcp_server.py` exposes six tools over MCP. **None of them talks to a
+quantum computer**, and that is the design:
+
+| | |
+|---|---|
+| `quantum-verifier` | will the right circuit survive this hardware? |
+| `qem-auditor` | is it the right circuit, and is the number real? |
+
+Backends, jobs, queues and vendor cost are served well by that project;
+a second implementation would make two projects that are each worse than
+one. Every tool here is a judgement, and several can answer *no*. A test
+asserts that no tool name contains `submit`, `job`, `backend`, `queue`,
+`provider` or `account`, so the boundary cannot erode quietly.
+
+```bash
+pip install -e ".[service]"
+python mcp_server.py --list      # the manifest
+python mcp_server.py             # serve
+```
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1287,6 +1342,8 @@ qem_auditor/
   estimation.py     measuring any Pauli observable, not just ours
   reversible.py     does the circuit compute what its author said?
   control.py        strip the mechanism, keep the rest: is the effect real?
+  engine.py         results table -> a recommendation, with the reason
+  service.py        the six tools the MCP server exposes
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
   memory.py         what this circuit reminds the auditor of

@@ -30,6 +30,9 @@ adapters = ["qiskit>=1.0", "qiskit-aer>=0.14"]
 # aer alone, and tests/test_real_device.py checks the pinned copy against
 # the snapshot whenever this IS installed, so it cannot drift unnoticed.
 devices = ["qiskit-ibm-runtime>=0.20"]
+# The auditor as a live service. Deliberately NOT a device-access surface:
+# see mcp_server.py for why that half is left to quantum-verifier.
+service = ["mcp>=1.2"]
 
 [project.scripts]
 qem-auditor = "qem_auditor.cli:main"
