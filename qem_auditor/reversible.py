@@ -245,3 +245,56 @@ def audit_oracle(circuit: Any, predicate: Callable, n_inputs: int,
         altered_inputs=altered,
         discrepancies=tuple(discrepancies),
     )
+
+
+# --- Bridge: this check as a pre-flight gate ------------------------------
+#
+# `quantum-verifier` runs a refusal chain in front of real hardware spend --
+# semantic, topology, ideal simulation, hardware-aware simulation, ground
+# truth -- and returns GO or BLOCK. This check belongs in that chain, before
+# any simulation, and it catches something none of those stages can.
+#
+# The reason is worth stating precisely, because it is not obvious. That
+# pipeline compares an ideal simulation against a hardware-aware one. Both
+# simulate the SAME circuit, so both are equally faithful to a circuit that
+# implements the wrong function: they agree with each other, and the
+# disagreement the pipeline looks for never appears. Its ground-truth stage
+# does compare against expected outcomes, but statistically, from sampled
+# counts -- and a 1097-state marked set inside a 4096-state space cannot be
+# resolved from 4096 shots by any test.
+#
+# Enumeration can, in 4096 exact steps, because these circuits never need a
+# state vector. So this stage answers "is it the right circuit" while the
+# rest of that chain answers "will the right circuit survive the hardware".
+# Neither substitutes for the other.
+
+def preflight_gate(circuit: Any, predicate: Callable, n_inputs: int,
+                   encode: Callable, ancillas: Optional[Sequence[int]] = None,
+                   inputs: Optional[Sequence] = None) -> dict:
+    """`audit_oracle` as a GO / BLOCK verdict, shaped for a preflight chain.
+
+    Returns the verdict, a reason, and the full report, so a caller can
+    gate on the verdict and still show its working. A circuit this
+    refuses is not one that mitigation, better qubits or more shots will
+    rescue: it computes the wrong function, and every downstream number
+    would be a faithful measurement of the wrong thing.
+
+    A circuit that is not permutation-plus-phase returns SKIP rather than
+    GO. Saying "this gate does not apply" is not the same as saying "this
+    circuit passed", and collapsing the two would let an unchecked
+    circuit through wearing a pass.
+    """
+    try:
+        report = audit_oracle(circuit, predicate=predicate, n_inputs=n_inputs,
+                              encode=encode, ancillas=ancillas, inputs=inputs)
+    except NotReversible as refusal:
+        return {"verdict": "SKIP", "reason": str(refusal), "report": None}
+
+    if report.matches_specification:
+        return {"verdict": "GO",
+                "reason": (f"exact check over all {report.n_inputs} inputs: the "
+                           "circuit implements its specification"),
+                "report": report}
+    return {"verdict": "BLOCK",
+            "reason": "; ".join(str(d) for d in report.discrepancies),
+            "report": report}

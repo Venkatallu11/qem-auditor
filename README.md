@@ -656,6 +656,65 @@ that this package objects to everywhere else. What the runs support is
 that the cheap method costs nothing measurable here, not that it costs a
 little.
 
+### The control experiment, and two bars it needed
+
+The idea is ported from [`quantum-verifier`](https://github.com/Venkatallu11/quantum-verifier-)'s
+`falsify`, and it is better than anything here had for the job: given a
+circuit claiming an effect, build a second circuit that removes the
+entangling mechanism and keeps everything else — qubit count, single-qubit
+gates, measurement structure — identical. Run both. Readout bias and SPAM
+hit both circuits equally and cancel out of the difference.
+
+It audits a **claim** where `data_sensitivity` audits a **method**, and it
+needs no known answer, which is exactly the discovery-mode case this
+package could not reach.
+
+Two things are added, because the ported version reports numbers without
+saying which are findings.
+
+**An effect size is not a finding until it clears its own noise.** Both
+of these come out of the same GHZ comparison:
+
+```
+isolated effect +0.4460 +- 0.0177   -> the mechanism contributes
+isolated effect -0.0024 +- 0.0052   -> NOT distinguishable from zero
+                                       (~38,600 shots each would resolve it)
+```
+
+**Total variation distance is not anchored at zero.** Two independent
+samples of the *same* distribution do not give TVD 0 — they give roughly
+√(outcomes/shots). Measured at 4096 shots:
+
+| qubits | outcomes | TVD comparing a distribution to **itself** |
+|---|---|---|
+| 3 | 8 | 0.022 |
+| 8 | 256 | 0.139 |
+| 10 | 1024 | 0.278 |
+| 12 | 4096 | 0.523 |
+
+So "TVD 0.52, where 0 is identical and 1 is completely different"
+describes two identical distributions. The null is measured by
+permutation on the run's own counts — pool both runs' shots, re-split at
+random — because it depends on the distribution's shape, not just the
+width: **0.279 for a near-uniform 10-qubit output, 0.011 for a
+concentrated one at the same width and shots.** A rule of thumb cannot
+span that.
+
+Candidate "bitstrings most boosted by entanglement" are withheld unless
+the shift clears its null. Ranking thousands of noisy differences and
+printing the top five is a selection — the largest is large whether or
+not anything happened.
+
+### A bridge into a preflight chain
+
+`reversible.preflight_gate` returns this package's exact check as
+`GO` / `BLOCK` / `SKIP`, the shape `quantum-verifier`'s pipeline speaks.
+It belongs before any simulation stage, because it catches what
+simulation structurally cannot: an ideal and a hardware-aware simulation
+of the *same wrong circuit* agree with each other, so the disagreement
+that pipeline looks for never appears. `SKIP` is deliberately not `GO` —
+"this check does not apply" must not read as "this circuit passed".
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1227,6 +1286,7 @@ qem_auditor/
   prescribe.py      what to do about it: error budget -> ranked advice
   estimation.py     measuring any Pauli observable, not just ours
   reversible.py     does the circuit compute what its author said?
+  control.py        strip the mechanism, keep the rest: is the effect real?
   layout.py         which qubits to run on, weighted by the budget
   ledger.py         the corpus that makes each audit inform the next
   memory.py         what this circuit reminds the auditor of

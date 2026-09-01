@@ -24,9 +24,11 @@ from .agent import AuditAgent, Investigation
 from .llm_scientist import LLMAdversary
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 from .prescribe import Consult, ErrorBudget, ErrorSource, Prescription, prescribe
+from .control import (ControlError, DistributionShift, IsolatedEffect,
+                      build_control, distribution_shift, isolate_effect)
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
 from .reversible import (Discrepancy, NotReversible, OracleReport, audit_oracle,
-                         evaluate)
+                         evaluate, preflight_gate)
 from .ledger import EvidenceLedger, Observation
 from .memory import (CaseMemory, CircuitFingerprint, PastCase, Recollection,
                      case_from_audit, fingerprint_from_spec)
@@ -49,6 +51,9 @@ __all__ = [
     "Consult", "ErrorBudget", "ErrorSource", "Prescription", "prescribe",
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
     "Discrepancy", "NotReversible", "OracleReport", "audit_oracle", "evaluate",
+    "preflight_gate",
+    "ControlError", "DistributionShift", "IsolatedEffect",
+    "build_control", "distribution_shift", "isolate_effect",
     "EvidenceLedger", "Observation",
     "CaseMemory", "CircuitFingerprint", "PastCase", "Recollection",
     "case_from_audit", "fingerprint_from_spec", "Store",
