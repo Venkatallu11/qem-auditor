@@ -26,6 +26,8 @@ jobs:
       - run: python run_trust.py
       - run: python run_audit_loop.py
       # Stdlib only: circuit memory needs no backend.
+      # The service surface must advertise exactly what it implements.
+      - run: python mcp_server.py --list > /dev/null
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
