@@ -11,12 +11,14 @@ from qem_auditor.power import (
     analyze_experiment,
     chi2_quantile,
     check_scope,
+    compare,
     interval_at_n,
     may_stop_early,
     mean_interval,
     normal_cdf,
     normal_quantile,
     power_at,
+    rank_with_ties,
     required_n,
     sequential_alpha,
     sigma_upper_bound,
@@ -209,3 +211,93 @@ class ExperimentIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComparisonTest(unittest.TestCase):
+    """Whether a printed ranking is a claim the runs support.
+
+    The shootout printed REM+ZNE above CDR on a gap of 0.14 between two
+    numbers that move by ten times that between seeds. Ordering them
+    asserted something the data did not, which is the over-claiming this
+    package objects to everywhere else.
+    """
+
+    def test_a_large_gap_is_called(self):
+        good = [1.0, 1.1, 0.9, 1.05]
+        bad = [37.0, 37.2, 36.8, 37.1]
+        result = compare("mitigated", good, "raw", bad)
+        self.assertTrue(result.distinguishable)
+        self.assertEqual(result.better, "mitigated")
+
+    def test_a_gap_inside_the_noise_is_refused(self):
+        a = [1.15, 2.5, 0.1, 0.9]
+        b = [1.29, 2.1, 0.4, 1.2]
+        result = compare("REM + ZNE", a, "CDR", b)
+        self.assertFalse(result.distinguishable)
+        self.assertIsNone(result.better,
+                          "returning the nominal leader would hand back a tie silently")
+        self.assertIn("not distinguishable", result.describe())
+
+    def test_it_says_how_many_runs_would_settle_it(self):
+        a = [1.15, 2.5, 0.1, 0.9]
+        b = [1.29, 2.1, 0.4, 1.2]
+        result = compare("a", a, "b", b)
+        self.assertGreater(result.required_n, len(a))
+        self.assertIn("would settle it", result.describe())
+
+    def test_an_identical_pair_cannot_be_settled_at_any_n(self):
+        """No finite experiment establishes that two methods are the same,
+        so a run count is not quoted for a gap of zero."""
+        values = [1.0, 2.0, 3.0, 4.0]
+        result = compare("a", values, "b", list(values))
+        self.assertEqual(result.gap, 0.0)
+        self.assertIsNone(result.required_n)
+        self.assertIn("no number of runs", result.describe())
+
+    def test_the_difference_carries_both_methods_noise(self):
+        """sqrt(2) wider than a single mean's error. Forgetting it is how
+        two methods get called distinguishable on half the runs it takes."""
+        a, b = [1.0, 2.0, 3.0, 4.0], [2.0, 3.0, 4.0, 5.0]
+        result = compare("a", a, "b", b)
+        self.assertAlmostEqual(result.standard_error,
+                               result.sigma * math.sqrt(2.0 / result.n))
+
+    def test_unequal_run_counts_are_refused(self):
+        with self.assertRaises(PowerError):
+            compare("a", [1.0, 2.0, 3.0], "b", [1.0, 2.0])
+
+    def test_more_runs_make_the_same_gap_resolvable(self):
+        a = [1.0, 1.4, 0.6, 1.2]
+        b = [1.3, 1.7, 0.9, 1.5]
+        few = compare("a", a, "b", b)
+        many = compare("a", a * 12, "b", b * 12)
+        self.assertFalse(few.distinguishable)
+        self.assertTrue(many.distinguishable)
+        self.assertAlmostEqual(few.gap, many.gap)
+
+
+class RankWithTiesTest(unittest.TestCase):
+
+    def test_indistinguishable_methods_share_a_tier(self):
+        tiers = rank_with_ties({
+            "REM + ZNE": [1.15, 2.5, 0.1, 0.9],
+            "CDR": [1.29, 2.1, 0.4, 1.2],
+            "unmitigated": [37.0, 37.2, 36.8, 37.1],
+        })
+        self.assertIn(sorted(tiers[0]), [["CDR", "REM + ZNE"]])
+        self.assertEqual(tiers[-1], ["unmitigated"])
+
+    def test_a_clear_ordering_stays_one_per_tier(self):
+        tiers = rank_with_ties({
+            "best": [1.0, 1.1, 0.9, 1.0],
+            "middle": [10.0, 10.1, 9.9, 10.0],
+            "worst": [40.0, 40.1, 39.9, 40.0],
+        })
+        self.assertEqual(tiers, [["best"], ["middle"], ["worst"]])
+
+    def test_tiers_are_ordered_best_first(self):
+        tiers = rank_with_ties({
+            "worst": [40.0, 40.1, 39.9, 40.0],
+            "best": [1.0, 1.1, 0.9, 1.0],
+        })
+        self.assertEqual(tiers[0], ["best"])

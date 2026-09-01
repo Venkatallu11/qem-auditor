@@ -425,8 +425,13 @@ It learns the noise map from data instead of assuming its structure. PEC,
 which assumes the structure, is the one that collapses — 2.03 → 17.13 —
 which is `CALIBRATION_MISMATCH` happening rather than being warned about.
 
-**On accuracy alone the fraud wins both tables.** `oracle peek` looks at
-the answer. A leaderboard ranked on error crowns it. What catches it is
+**On accuracy alone the fraud wins both tables** — and it is worse than
+that. On the measured device the fraud (0.737) and the best real method
+(0.732) are **not distinguishable**: 0.005 apart against a spread of
+0.72, so whichever printed first did so by luck. `power.compare` says it
+would take about **143 runs each** to separate them. A leaderboard ranked
+on error does not merely crown the fraud; it has nothing to crown it
+*over*. What catches it is
 `data_sensitivity`: scramble the outcome labels and every honest method's
 answer moves as much as the raw estimate does (ratios 0.82–1.12), while
 the fraud moves 2% as far (**0.020**). The bar sits in an empty gap, not
@@ -446,6 +451,23 @@ scores 1.56 on the measured noise and ranges 0.34 → 5.51 across runs** —
 a 16x lottery — while CDR's median is 0.2 worse and far steadier. On the
 single run a real experiment gets, the median winner is the one you can
 least rely on. That is what `tail_risk` and `reproducibility` are for.
+
+**A printed order is a claim.** `power.rank_with_ties` groups the methods
+the runs cannot actually separate, so the table stops asserting an
+ordering it did not earn:
+
+```
+not separated by these runs:
+  oracle peek (fraud) = REM + ZNE = CDR
+  REM (readout) = REM (tensored) = symmetry verification
+  unmitigated = dressed identity
+    0 apart -- and no number of runs establishes that two methods
+    are identical, so none is quoted
+```
+
+The last line is the honest form of a question people ask constantly.
+"Are these the same?" is not something a finite experiment answers, so
+the report declines to name a run count rather than inventing one.
 
 ```bash
 python examples/method_shootout.py            # ~3m, needs qiskit-aer
@@ -623,8 +645,16 @@ because full REM needs 2ⁿ calibration circuits and refuses at seven
 qubits — 262,144 of them here, against two at any width. It is
 registered under its own name, not as full REM made cheaper: it assumes
 readout errors factorise, which discards exactly the crosstalk between
-neighbouring resonators. Measured on `fake_kyiv`, it recovers 4.92
-against full REM's 4.76 kcal/mol.
+neighbouring resonators.
+
+Measured on `fake_kyiv` over 6 seeds, the two are **not distinguishable**:
+means 0.05 kcal/mol apart against a spread of 1.69, and `power.compare`
+puts the separating run count at about 18,000 each. An earlier draft of
+this section quoted a single seed — 4.92 against 4.76 — which read as
+"tensored is slightly worse" and was the same over-claiming from one run
+that this package objects to everywhere else. What the runs support is
+that the cheap method costs nothing measurable here, not that it costs a
+little.
 
 ### Every audit makes the next one better
 
