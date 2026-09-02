@@ -113,3 +113,36 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoadFailureNamesTheRemedyTest(unittest.TestCase):
+    """The first thing a new reader does is follow the quick start.
+
+    The template `check --template` prints builds its circuit with qiskit,
+    which the dependency-free core install does not have. "No module named
+    'qiskit'" is true, and useless at that moment, so the error carries
+    the fix. Found by installing the package into a clean virtualenv and
+    following the README as written.
+    """
+
+    def _check(self, source: str):
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "mine.py"
+            script.write_text(source)
+            buffer = io.StringIO()
+            with redirect_stderr(buffer):
+                code = main(["check", str(script)])
+        return code, buffer.getvalue()
+
+    def test_a_missing_qiskit_says_which_extra_to_install(self):
+        code, message = self._check('raise ImportError("No module named \'qiskit\'")\n')
+        self.assertEqual(code, EXIT_BAD_RECORD)
+        self.assertIn('pip install -e ".[adapters]"', message)
+
+    def test_an_unrelated_import_error_gets_no_invented_remedy(self):
+        """Guessing a fix for an import this package knows nothing about
+        would be worse than silence."""
+        code, message = self._check("import a_package_that_does_not_exist_xyz\n")
+        self.assertEqual(code, EXIT_BAD_RECORD)
+        self.assertNotIn("adapters", message)

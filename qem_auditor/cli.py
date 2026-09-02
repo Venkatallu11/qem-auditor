@@ -310,6 +310,14 @@ def _cmd_check(args) -> int:
         module = _load_module(args.path)
     except Exception as e:
         print(f"error: could not load {args.path}: {e}", file=sys.stderr)
+        # The first thing a new reader does is follow the quick start, and
+        # the template it prints defines its circuit with qiskit -- which
+        # the dependency-free core install does not have. "No module named
+        # 'qiskit'" is a true error and a useless one at that moment, so
+        # it carries the remedy.
+        if isinstance(e, ImportError) and "qiskit" in str(e):
+            print('       the starting template builds its circuit with qiskit: '
+                  'pip install -e ".[adapters]"', file=sys.stderr)
         return EXIT_BAD_RECORD
 
     circuit = getattr(module, "circuit", None)

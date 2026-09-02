@@ -36,8 +36,9 @@ Three rules do most of the work:
 ## Quick start
 
 ```bash
-pip install -e .                 # core: no dependencies at all
-pip install -e ".[adapters]"     # plus qiskit, to execute controls
+pip install -e ".[adapters]"     # to bring a circuit (needs qiskit)
+pip install -e .                 # core only: no dependencies at all,
+                                 # for grading records you already have
 ```
 
 Bring a circuit, get a verdict — no record to write:
