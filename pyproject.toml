@@ -24,7 +24,12 @@ dependencies = []
 
 [project.optional-dependencies]
 # Needed only to EXECUTE controls rather than grade a record as written.
-adapters = ["qiskit>=1.0", "qiskit-aer>=0.14"]
+# Qiskit 2.0 is the floor because that is what is actually tested: CI
+# installs the current release (2.5 at time of writing) and the whole
+# suite runs against it. The previous ">=1.0" was a compatibility claim
+# nothing here verified, which is the kind of unchecked claim this
+# package exists to object to.
+adapters = ["qiskit>=2.0", "qiskit-aer>=0.14"]
 # Real device calibration snapshots. Optional even for the adapters:
 # examples/real_device_audit.py pins the numbers it needs so it runs on
 # aer alone, and tests/test_real_device.py checks the pinned copy against
