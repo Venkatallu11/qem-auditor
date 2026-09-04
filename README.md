@@ -771,6 +771,60 @@ python mcp_server.py --list      # the manifest
 python mcp_server.py             # serve
 ```
 
+### If you already ran it: the hardware door
+
+Every other entry point wants a circuit or a written record. Someone
+holding counts from a real device — the person this is most for — had
+nothing to point at them.
+
+```bash
+qem-auditor analyze --template > results.json   # the shape
+qem-auditor analyze results.json
+```
+
+No qiskit needed: counts are dictionaries, so a hardware post-mortem
+runs in the dependency-free install.
+
+The first thing it computes is the one nobody computes for themselves —
+**the shot-noise floor of your own estimate**:
+
+```
+estimate -0.89 +- 0.004459 (95%, 16000 shots over 2 settings)
+-> the quoted +-0.0005 is BELOW the shot-noise floor of +-0.004459.
+   No analysis of this data reaches that precision. About 1272292 shots would.
+```
+
+A quoted uncertainty below that floor isn't optimistic, it's
+**unattainable**, and it can be checked from the counts alone — no model,
+no method, no assumption about the device. The source project quoted
+0.115 kcal/mol from a single submission and later disowned it. A floor
+computed on the day would have said so on the day.
+
+The variance is exact, not a rule of thumb. Terms sharing a measurement
+setting are correlated, so the per-shot value of each setting's whole
+contribution is formed from the counts and its variance taken directly —
+adding term variances independently would understate the floor, which is
+the wrong direction to be wrong for a number whose job is to refuse.
+Checked against 3,000 resampled experiments: **0.58σ from exact**.
+
+**Mitigation widens the bar, and the report says so.** This module's own
+first draft corrected the counts and then measured their spread, which
+reported `± 0` on a mitigated estimate — a pipeline claiming *more*
+precision after mitigation, produced by the package that exists to catch
+exactly that. The weights are now pushed through the correction instead,
+so the estimate is the same and the error bar is right:
+
+```
+unmitigated      -0.89     +- 0.004459
+REM (tensored)   -0.830322 +- 0.006226   (shot noise amplified 1.40x)
+```
+
+Validated against 2,500 resampled experiments: predicted amplification
+**1.304×**, observed **1.304×**, with the bias removed exactly.
+
+And it names what's missing rather than only what failed — *"submit
+counts at fold 3 and 5 and we can run ZNE"*, not *"ZNE unavailable"*.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1343,6 +1397,7 @@ qem_auditor/
   estimation.py     measuring any Pauli observable, not just ours
   reversible.py     does the circuit compute what its author said?
   control.py        strip the mechanism, keep the rest: is the effect real?
+  results.py        counts you already have: the floor, and what beats it
   engine.py         results table -> a recommendation, with the reason
   service.py        the six tools the MCP server exposes
   layout.py         which qubits to run on, weighted by the budget

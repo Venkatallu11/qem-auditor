@@ -28,6 +28,10 @@ jobs:
       # Stdlib only: circuit memory needs no backend.
       # The service surface must advertise exactly what it implements.
       - run: python mcp_server.py --list > /dev/null
+      # The hardware door: counts in, verdict out, no qiskit needed.
+      - run: |
+          python -m qem_auditor analyze --template > /tmp/counts.json
+          python -m qem_auditor analyze /tmp/counts.json
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json
