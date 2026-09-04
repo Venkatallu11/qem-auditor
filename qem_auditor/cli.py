@@ -152,6 +152,75 @@ def _render_guidance(result) -> str:
     return "\n".join(parts)
 
 
+def _cmd_analyze_or_template(args) -> int:
+    import json
+    if getattr(args, "template", False):
+        print(json.dumps(ANALYZE_TEMPLATE, indent=2))
+        return EXIT_OK
+    if not args.path:
+        print("error: give a JSON bundle of counts, or --template for its shape",
+              file=sys.stderr)
+        return EXIT_BAD_RECORD
+    return _cmd_analyze(args)
+
+
+def _cmd_analyze(args) -> int:
+    """Read someone's hardware results and say what they support.
+
+    The door for a person who already ran the experiment. Everything else
+    here wants a circuit or a written record; this wants the counts, which
+    is what a person actually has when they come back from a device.
+    """
+    import json
+
+    from .results import analyse
+
+    try:
+        with open(args.path) as handle:
+            bundle = json.load(handle)
+    except Exception as failure:
+        print(f"error: could not read {args.path}: {failure}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    missing = [key for key in ("measurements", "observable") if key not in bundle]
+    if missing:
+        print(f"error: {args.path} is missing {', '.join(missing)}. "
+              "Run `qem-auditor analyze --template` for the shape.",
+              file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    try:
+        report = analyse(
+            measurements=bundle["measurements"],
+            observable=[(term["pauli"], term["coefficient"])
+                        if isinstance(term, dict) else tuple(term)
+                        for term in bundle["observable"]],
+            calibration=bundle.get("calibration"),
+            folds=bundle.get("folds"),
+            claimed_uncertainty=bundle.get("claimed_uncertainty"))
+    except Exception as failure:
+        print(f"error: {failure}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    print(f"RESULTS  {args.path}")
+    print(report.format_report())
+    return EXIT_NOT_CERTIFIED if report.claim_is_impossible else EXIT_OK
+
+
+ANALYZE_TEMPLATE = {
+    "observable": [["ZZ", 0.4], ["XX", -0.2], ["II", -1.05]],
+    "measurements": {
+        "ZZ": {"00": 7000, "11": 500, "01": 300, "10": 200},
+        "XX": {"00": 4200, "11": 3600, "01": 100, "10": 100},
+    },
+    "calibration": {
+        "prepared_0": {"00": 8600, "01": 600, "10": 700, "11": 100},
+        "prepared_1": {"11": 8500, "10": 700, "01": 700, "00": 100},
+    },
+    "claimed_uncertainty": 0.05,
+}
+
+
 def _cmd_remember(args) -> int:
     """What the corpus holds, and what it says about one circuit.
 
@@ -546,6 +615,15 @@ def build_parser() -> argparse.ArgumentParser:
                                  "without one, summarise the whole corpus")
     _add_store_arguments(p_remember)
     p_remember.set_defaults(func=_cmd_remember)
+
+    p_analyze = sub.add_parser(
+        "analyze",
+        help="audit measurement counts you already have -- the hardware door")
+    p_analyze.add_argument("path", nargs="?",
+                           help="a JSON bundle of counts; omit with --template")
+    p_analyze.add_argument("--template", action="store_true",
+                           help="print an example bundle to fill in")
+    p_analyze.set_defaults(func=_cmd_analyze_or_template)
 
     p_template = sub.add_parser("template", help="print a blank record to fill in")
     p_template.set_defaults(func=_cmd_template)

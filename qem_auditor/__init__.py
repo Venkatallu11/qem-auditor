@@ -24,6 +24,8 @@ from .agent import AuditAgent, Investigation
 from .llm_scientist import LLMAdversary
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 from .prescribe import Consult, ErrorBudget, ErrorSource, Prescription, prescribe
+from .results import (MitigatedEstimate, ResultsReport, ShotNoise, analyse,
+                      shot_noise)
 from .control import (ControlError, DistributionShift, IsolatedEffect,
                       build_control, distribution_shift, isolate_effect)
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
@@ -52,6 +54,7 @@ __all__ = [
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
     "Discrepancy", "NotReversible", "OracleReport", "audit_oracle", "evaluate",
     "preflight_gate",
+    "MitigatedEstimate", "ResultsReport", "ShotNoise", "analyse", "shot_noise",
     "ControlError", "DistributionShift", "IsolatedEffect",
     "build_control", "distribution_shift", "isolate_effect",
     "EvidenceLedger", "Observation",
