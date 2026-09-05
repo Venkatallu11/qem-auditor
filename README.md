@@ -583,6 +583,11 @@ over the region you named, and the report says which region that was.
 
 ### Before mitigation: is it the circuit you said it was?
 
+> **[Full case study: an 18-qubit oracle that marked one state](docs/case-study-logo-oracle.md)**
+> — every defect traced to the line that caused it, what a correct
+> implementation costs, and why no hardware available can run one.
+
+
 An 18-qubit phase oracle arrived from outside this project — a 64x64 logo
 bitmap, a specification naming 1097 marked pixels, a depth target of 726,
 and a submission file asserting `"verified": true`. Three findings, in
