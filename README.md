@@ -970,6 +970,61 @@ no prediction: the closest budget seen is only 0.05 similar to this one
 here is how a model earns trust it has not been given.
 ```
 
+### Fifteen methods, and one answer
+
+Bring a circuit and it meets everything available, not everything
+convenient. The catalogue is now fifteen: readout mitigation in three
+forms (full inversion, tensored, and a non-negative iterative solve),
+ZNE in three (linear folding, Richardson, exponential), CDR and vnCDR,
+PEC, symmetry verification, Pauli twirling, the compositions — and the
+two deliberate frauds that keep the detectors honest.
+
+Two of the new ones earn their place by what they refuse or fail to do.
+
+**ZNE (exponential)** fits `a + B·Rˣ` rather than a polynomial, and on
+the measured device it **refuses**: *"fitted decay ratio 1.157 is not a
+decay; the noise is not behaving the way this model assumes."* Three
+points that are not a decay are not an exponential sampled with noise,
+and extrapolating anyway is invention.
+
+**Pauli twirling** makes the answer slightly *worse* — 37.06 against
+35.33 unmitigated. Correct: that noise model is already depolarizing, so
+there is no coherent error to convert and the extra gates only cost. A
+method that does nothing when its assumption is unmet, visibly, is more
+useful than one that always appears to help.
+
+Each CX is wrapped in a random Pauli and its compensating partner. A test
+asserts the twirled circuit equals the original **up to global phase** —
+the property that matters — rather than the Pauli identity in the table,
+which is off by a sign on two entries in a way no expectation value can
+see.
+
+**One answer, with disagreement inside the bar.** `engine.consensus`
+runs everything, excludes what failed its attack, and reports the median
+of the survivors with *two* uncertainty terms:
+
+```
+answer: 1.2675 +- 0.3783
+  shot noise      0.05
+  method spread   0.375
+  agreed by 4 methods: REM + ZNE, CDR, ZNE (exponential), REM (iterative)
+  excluded: oracle peek (fraud)
+  -> the bar is dominated by DISAGREEMENT between methods, not by shot
+     noise. More shots will not narrow it.
+```
+
+That second term is the one a single-method pipeline cannot compute at
+all. Two methods agreeing within their shot noise is evidence; two
+disagreeing by ten times it means the answer depends on which assumption
+you made, and no number of shots fixes that.
+
+**A method that can refuse changed the plumbing.** Before this, every
+all-methods loop assumed a number always came back. The first refusing
+extrapolator broke two tests at once. `methods.attempt` is now the
+blessed way to run a method that might decline, `data_sensitivity`
+returns `None` rather than a score for a method that never ran, and a
+refusal is reported as absent rather than as a failure.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and

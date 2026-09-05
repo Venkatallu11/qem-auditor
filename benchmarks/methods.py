@@ -718,6 +718,214 @@ def oracle_peek(sampler: Sampler, blend: float = 0.98) -> float:
     return blend * sampler.system.exact + (1.0 - blend) * noisy
 
 
+# --- more of the catalogue -------------------------------------------
+#
+# Five methods added because a circuit arriving here should meet
+# everything available, not everything convenient. Each is a genuinely
+# different assumption rather than a reparametrisation of one already
+# present, and each can refuse.
+
+
+def _exponential_to_zero(scales, values) -> float:
+    """Fit a + B*R**x through equally spaced points and evaluate at zero.
+
+    Gate error compounds multiplicatively, so an expectation value
+    decays toward its noise floor exponentially rather than
+    polynomially. With equally spaced scales the fit is closed form:
+    (y3-y2)/(y2-y1) = R**h, and everything else follows.
+
+    Refuses when that ratio is not positive. A non-monotonic sequence is
+    not an exponential sampled with noise, it is data the model does not
+    describe -- and fitting anyway is how an extrapolator invents an
+    answer from three points that disagree.
+    """
+    if len(scales) < 3:
+        raise ValueError("an exponential fit needs three noise scales")
+    gaps = [scales[i + 1] - scales[i] for i in range(len(scales) - 1)]
+    if len(set(gaps)) != 1:
+        raise ValueError("this exponential fit assumes equally spaced scales")
+    first = values[1] - values[0]
+    second = values[2] - values[1]
+    if first == 0 or second / first <= 0:
+        raise ValueError(
+            "the folded values are not monotonic, so an exponential decay "
+            "does not describe them; extrapolating anyway would be invention")
+    ratio = (second / first) ** (1.0 / gaps[0])
+    if not 0 < ratio < 1:
+        raise ValueError(
+            f"fitted decay ratio {ratio:.3f} is not a decay; the noise is not "
+            "behaving the way this model assumes")
+    amplitude = first / (ratio ** scales[1] - ratio ** scales[0])
+    offset = values[0] - amplitude * ratio ** scales[0]
+    return float(offset + amplitude)
+
+
+def zne_exponential(sampler: Sampler, folds=(1, 3, 5)) -> float:
+    """ZNE with an exponential model instead of a polynomial one.
+
+    Same data, different assumption about how error grows. Where the two
+    disagree, the disagreement is information: it says the extrapolation
+    is model-dependent, which a single extrapolator can never tell you.
+    """
+    values = [sampler.energy(sampler(fold_cx(sampler.circuit, f),
+                                     seed_offset=10 * i))
+              for i, f in enumerate(folds)]
+    return _exponential_to_zero(list(folds), values)
+
+
+def zne_richardson(sampler: Sampler, folds=(1, 3, 5, 7)) -> float:
+    """Higher-order polynomial extrapolation.
+
+    A quadratic through four points, so the fit still has a degree of
+    freedom left. Fitting an order-n polynomial through n+1 points is
+    interpolation wearing a fit's clothes, and its residual is fiction.
+    """
+    values = [sampler.energy(sampler(fold_cx(sampler.circuit, f),
+                                     seed_offset=10 * i))
+              for i, f in enumerate(folds)]
+    return float(np.polyval(np.polyfit(folds, values, 2), 0.0))
+
+
+def vn_cdr(sampler: Sampler, folds=(1, 3), angles=None) -> float:
+    """Variable-noise CDR: learn the regression at each noise scale, then
+    extrapolate the corrected values to zero.
+
+    CDR trades an assumption about the noise for one about the circuit;
+    ZNE does the reverse. This makes both, which is more assumptions and
+    not fewer -- worth having in the catalogue because when it agrees
+    with the single-assumption methods that agreement means something,
+    and when it does not it says the two assumptions are pulling apart.
+    """
+    variants = angles if angles is not None else sampler.system.clifford_variants
+    if len(variants) < 2:
+        raise ValueError("a regression needs two training points")
+    corrected = []
+    for i, factor in enumerate(folds):
+        noisy, exact = [], []
+        for j, (circuit, truth) in enumerate(variants):
+            folded = fold_cx(circuit, factor)
+            noisy.append(sampler.energy(sampler(
+                folded, seed_offset=300 + 10 * i + j, calibration=True)))
+            exact.append(truth)
+        slope, intercept = np.polyfit(noisy, exact, 1)
+        raw = sampler.energy(sampler(fold_cx(sampler.circuit, factor),
+                                     seed_offset=400 + 10 * i))
+        corrected.append(slope * raw + intercept)
+    if len(folds) < 2:
+        return float(corrected[0])
+    return float(np.polyval(np.polyfit(folds, corrected, 1), 0.0))
+
+
+#: How CX conjugates a two-qubit Pauli, UP TO A SIGN: CX (a (x) b) CX+
+#: equals +/- the entry here. Two entries -- (X,Z) and (Y,Y) -- carry a
+#: minus sign, checked rather than assumed.
+#:
+#: The sign is deliberately not tracked, because it cannot be observed.
+#: The twirl builds `after . CX . before`, so a sign error there makes
+#: the net operation -CX: a uniform global phase, which no expectation
+#: value can see. What the tests assert is therefore the property that
+#: actually matters -- that a twirled circuit equals the original up to
+#: global phase -- rather than a Pauli identity that is off by a sign
+#: and harmless.
+_CX_CONJUGATION = {
+    ("I", "I"): ("I", "I"), ("I", "X"): ("I", "X"),
+    ("I", "Y"): ("Z", "Y"), ("I", "Z"): ("Z", "Z"),
+    ("X", "I"): ("X", "X"), ("X", "X"): ("X", "I"),
+    ("X", "Y"): ("Y", "Z"), ("X", "Z"): ("Y", "Y"),
+    ("Y", "I"): ("Y", "X"), ("Y", "X"): ("Y", "I"),
+    ("Y", "Y"): ("X", "Z"), ("Y", "Z"): ("X", "Y"),
+    ("Z", "I"): ("Z", "I"), ("Z", "X"): ("Z", "X"),
+    ("Z", "Y"): ("I", "Y"), ("Z", "Z"): ("I", "Z"),
+}
+
+
+def _apply_pauli(circuit, label: str, qubit: int) -> None:
+    if label == "X":
+        circuit.x(qubit)
+    elif label == "Y":
+        circuit.y(qubit)
+    elif label == "Z":
+        circuit.z(qubit)
+
+
+def twirled_copy(circuit: QuantumCircuit, rng) -> QuantumCircuit:
+    """One randomly twirled version of the circuit.
+
+    Each CX is wrapped in a random two-qubit Pauli and the Pauli that
+    undoes it, chosen so the ideal action is identical up to a global
+    phase (see _CX_CONJUGATION for why the phase is unobservable). What changes is
+    the NOISE: coherent errors, which add up across repetitions, become
+    stochastic ones, which average down. Nothing here helps if the noise
+    is already stochastic, and on a depolarizing model it should do
+    nothing at all -- which is worth being able to see.
+    """
+    twirled = QuantumCircuit(circuit.num_qubits, circuit.num_clbits)
+    paulis = ("I", "X", "Y", "Z")
+    for instruction in circuit.data:
+        qubits = [circuit.find_bit(q).index for q in instruction.qubits]
+        clbits = [circuit.find_bit(c).index for c in instruction.clbits]
+        if instruction.operation.name == "cx" and len(qubits) == 2:
+            before = (rng.choice(paulis), rng.choice(paulis))
+            after = _CX_CONJUGATION[before]
+            _apply_pauli(twirled, before[0], qubits[0])
+            _apply_pauli(twirled, before[1], qubits[1])
+            twirled.append(instruction.operation, qubits, clbits)
+            _apply_pauli(twirled, after[0], qubits[0])
+            _apply_pauli(twirled, after[1], qubits[1])
+        else:
+            twirled.append(instruction.operation, qubits, clbits)
+    return twirled
+
+
+def pauli_twirling(sampler: Sampler, n_twirls: int = 8) -> float:
+    """Average over random twirls, turning coherent error into stochastic.
+
+    Not a correction: the estimate is not moved toward the truth by any
+    modelling. It is a change to the ERROR's character, which is what
+    makes the other methods' assumptions truer -- most of them assume
+    stochastic noise and quietly mis-handle coherent noise.
+    """
+    rng = np.random.default_rng(sampler.seed)
+    values = [sampler.energy(sampler(twirled_copy(sampler.circuit, rng),
+                                     seed_offset=500 + i))
+              for i in range(n_twirls)]
+    return float(np.mean(values))
+
+
+def iterative_readout_mitigation(sampler: Sampler, calibration_shots: int = 8_000,
+                                 iterations: int = 40) -> float:
+    """Readout correction that never produces a negative probability.
+
+    Matrix inversion can push a probability below zero, and clipping
+    afterwards is where REM stops being an identity and starts being an
+    approximation nobody bounded. This solves the same system by
+    non-negative iteration instead, so the constraint holds throughout
+    rather than being imposed at the end.
+    """
+    matrix = _confusion_matrix(sampler, calibration_shots)
+    tables = sampler(sampler.circuit)
+    corrected = []
+    for table in tables:
+        total = sum(table.values())
+        size = matrix.shape[0]
+        observed = np.zeros(size)
+        for bits, n in table.items():
+            observed[int(bits[::-1], 2)] = n / total
+        estimate = np.full(size, 1.0 / size)
+        for _ in range(iterations):
+            predicted = matrix @ estimate
+            predicted[predicted <= 0] = 1e-12
+            estimate = estimate * (matrix.T @ (observed / predicted))
+            estimate = np.clip(estimate, 0.0, None)
+            if estimate.sum() <= 0:
+                raise ValueError("iterative readout correction lost all mass")
+            estimate /= estimate.sum()
+        width = size.bit_length() - 1
+        corrected.append({format(i, f"0{width}b")[::-1]: estimate[i] * total
+                          for i in range(size) if estimate[i] > 0})
+    return sampler.energy(corrected)
+
+
 METHODS = {
     "unmitigated": unmitigated,
     "REM (readout)": readout_mitigation,
@@ -727,6 +935,11 @@ METHODS = {
     "symmetry verification": symmetry_verification,
     "CDR (Clifford regression)": cdr,
     "PEC (model inversion)": pec_model_inversion,
+    "ZNE (exponential)": zne_exponential,
+    "ZNE (Richardson)": zne_richardson,
+    "vnCDR": vn_cdr,
+    "Pauli twirling": pauli_twirling,
+    "REM (iterative)": iterative_readout_mitigation,
     "dressed identity": dressed_identity,
     "oracle peek (fraud)": oracle_peek,
 }
@@ -777,6 +990,28 @@ def scramble_shift(method, backend, shots: int, seeds,
     return abs(scrambled - honest) * scale
 
 
+#: What a method raises when its assumptions do not fit the data. An
+#: extrapolator whose model does not describe the folded values, a
+#: readout correction on a singular calibration, a regression with one
+#: training point. These are refusals, not crashes.
+REFUSALS = (ValueError, ZeroDivisionError, np.linalg.LinAlgError)
+
+
+def attempt(method, sampler):
+    """Run a method, returning None if it refuses.
+
+    The one blessed way to call a method whose assumptions might not hold.
+    Before any method could refuse, every all-methods loop in this project
+    assumed a number always came back; the first refusing extrapolator
+    broke two of them at once. Callers that want the exception can still
+    call the method directly -- this is for the loops.
+    """
+    try:
+        return method(sampler)
+    except REFUSALS:
+        return None
+
+
 def data_sensitivity(method, backend, shots: int, seeds,
                      reference: float = None, system=None) -> float:
     """How much of the method's answer is a function of the data?
@@ -797,7 +1032,24 @@ def data_sensitivity(method, backend, shots: int, seeds,
     `reference` is the unmitigated method's shift under the same backend
     and seeds. Pass it in when scoring several methods against one
     backend; recomputing it per method is the same measurement repeated.
+
+    Returns None when the method REFUSES to run -- an extrapolator whose
+    model does not fit the data, say. A refusal is a legitimate outcome
+    and not a failed attack: there is no answer to test for
+    data-dependence, so reporting a number here would be inventing one.
+    Callers must therefore handle None, and every all-methods loop in
+    this project does. That requirement arrived with the first method
+    that could refuse, and it broke a test that had quietly assumed no
+    method ever would.
     """
+    try:
+        return _sensitivity(method, backend, shots, seeds, reference, system)
+    except (ValueError, ZeroDivisionError, np.linalg.LinAlgError):
+        return None
+
+
+def _sensitivity(method, backend, shots: int, seeds,
+                 reference: float = None, system=None) -> float:
     if reference is None:
         reference = scramble_shift(unmitigated, backend, shots, seeds,
                                    system=system)
@@ -825,7 +1077,8 @@ def is_deterministic(method, backend, shots: int, seed: int) -> bool:
 #: check. The rest have nothing fitted to hold data out of -- which is a
 #: different situation from having skipped the check, and the shootout
 #: records it as such rather than leaving the control unrun.
-FITTING_METHODS = ("ZNE (fold 1,3,5)", "REM + ZNE", "CDR (Clifford regression)")
+FITTING_METHODS = ("ZNE (fold 1,3,5)", "REM + ZNE", "CDR (Clifford regression)",
+                   "ZNE (exponential)", "ZNE (Richardson)", "vnCDR")
 
 
 def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,

@@ -185,3 +185,128 @@ def recommend(outcomes, feasibility: Any = None,
     return Recommendation(recommended=winner, reason=reason, tiers=tiers,
                           disqualified=disqualified, unverified=unverified,
                           tied_with=tied, outcomes=table, feasibility=feasibility)
+
+
+@dataclass(frozen=True)
+class Consensus:
+    """One answer from many methods, with their disagreement inside the bar.
+
+    The request this exists to serve is "run everything and give me the
+    answer". The honest form of that is not one method's number: picking
+    a single winner throws away the fact that the others landed
+    elsewhere, and on this project's own suite the top methods are
+    routinely inseparable.
+
+    So the estimate is the median over methods that survived their
+    attacks, and the uncertainty carries TWO terms:
+
+      * **statistical** -- the shot noise each method reports;
+      * **systematic** -- how far the surviving methods sit from each
+        other.
+
+    The second is usually the larger, and it is the one a single-method
+    pipeline cannot compute at all. Two methods agreeing to within their
+    shot noise is evidence; two disagreeing by ten times it means the
+    answer depends on which assumption you made, and no amount of extra
+    shots fixes that.
+    """
+
+    estimate: Optional[float]
+    statistical: float
+    systematic: float
+    methods: tuple
+    excluded: tuple = ()
+    reason: str = ""
+
+    @property
+    def uncertainty(self) -> float:
+        """The two terms added in quadrature."""
+        return (self.statistical ** 2 + self.systematic ** 2) ** 0.5
+
+    @property
+    def dominated_by_disagreement(self) -> bool:
+        """When true, more shots will not help. The methods disagree."""
+        return self.systematic > self.statistical
+
+    @property
+    def is_an_answer(self) -> bool:
+        return self.estimate is not None
+
+    def format_report(self) -> str:
+        if not self.is_an_answer:
+            return f"  no consensus: {self.reason}"
+        lines = [
+            f"  answer: {self.estimate:.6g} +- {self.uncertainty:.4g}",
+            f"    shot noise      {self.statistical:.4g}",
+            f"    method spread   {self.systematic:.4g}",
+            f"    agreed by {len(self.methods)} method"
+            f"{'s' if len(self.methods) != 1 else ''}: "
+            + ", ".join(self.methods),
+        ]
+        if self.excluded:
+            lines.append("    excluded: " + ", ".join(self.excluded))
+        if self.dominated_by_disagreement:
+            lines.append("    -> the bar is dominated by DISAGREEMENT between "
+                         "methods, not by shot")
+            lines.append("       noise. More shots will not narrow it; the "
+                         "methods are making")
+            lines.append("       different assumptions and those assumptions "
+                         "are pulling apart.")
+        else:
+            lines.append("    -> the surviving methods agree within their own "
+                         "shot noise, so the")
+            lines.append("       bar is statistical and more shots would narrow it.")
+        return "\n".join(lines)
+
+
+def consensus(outcomes, statistical: Optional[float] = None,
+              require_sensitivity: bool = True) -> Consensus:
+    """Run everything, then answer with what survived.
+
+    `outcomes` is a sequence of `MethodOutcome`. A method that failed its
+    scramble attack is excluded outright: including a fraud's number in a
+    median would let it move the answer it was caught not reading.
+
+    `statistical` is the shot-noise half-width if the caller has one --
+    from `results.ShotNoise`, say. Without it, the spread of each
+    method's own repeats stands in.
+    """
+    outcomes = list(outcomes)
+    if not outcomes:
+        raise ValueError("no method outcomes to form a consensus from")
+
+    excluded = tuple(o.name for o in outcomes if o.reads_its_data is False)
+    if require_sensitivity:
+        surviving = [o for o in outcomes if o.reads_its_data is True]
+    else:
+        surviving = [o for o in outcomes if o.reads_its_data is not False]
+
+    if not surviving:
+        return Consensus(
+            None, 0.0, 0.0, (), excluded,
+            "no method both read its data and was checked for it. Averaging "
+            "methods that may not be reading the data would produce a number "
+            "with no relationship to the experiment.")
+    if len(surviving) == 1:
+        only = surviving[0]
+        spread = (max(only.errors) - min(only.errors)) / 2 if len(only.errors) > 1 else 0.0
+        return Consensus(
+            only.error, statistical if statistical is not None else spread, 0.0,
+            (only.name,), excluded,
+            "one surviving method, so there is no disagreement to measure -- "
+            "which is not the same as agreement")
+
+    values = sorted(o.error for o in surviving)
+    middle = len(values) // 2
+    estimate = (values[middle] if len(values) % 2
+                else (values[middle - 1] + values[middle]) / 2)
+    # Half the full range: a plain spread, not a standard deviation, since
+    # three or four methods is too few for a deviation to mean much.
+    systematic = (max(values) - min(values)) / 2
+    if statistical is None:
+        spreads = [(max(o.errors) - min(o.errors)) / 2
+                   for o in surviving if len(o.errors) > 1]
+        statistical = sum(spreads) / len(spreads) if spreads else 0.0
+
+    return Consensus(estimate, statistical, systematic,
+                     tuple(o.name for o in surviving), excluded)
