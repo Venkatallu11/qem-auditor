@@ -1,0 +1,146 @@
+[
+ {
+  "label": "g0.002_r0.002",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.4275745354728434,
+   "SHOT_NOISE": 0.33408785842140304,
+   "READOUT": 0.2383376061057536
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.002_r0.01",
+  "budget_shares": {
+   "READOUT": 0.6072126801266203,
+   "GATE_STOCHASTIC": 0.22049907830660473,
+   "SHOT_NOISE": 0.17228824156677494
+  },
+  "winner": "REM (readout)"
+ },
+ {
+  "label": "g0.002_r0.03",
+  "budget_shares": {
+   "READOUT": 0.8181891139711882,
+   "GATE_STOCHASTIC": 0.1020632051166607,
+   "SHOT_NOISE": 0.07974768091215113
+  },
+  "winner": "REM (readout)"
+ },
+ {
+  "label": "g0.002_r0.08",
+  "budget_shares": {
+   "READOUT": 0.9175362550105928,
+   "GATE_STOCHASTIC": 0.04629268523672503,
+   "SHOT_NOISE": 0.036171059752682234
+  },
+  "winner": "REM (readout)"
+ },
+ {
+  "label": "g0.008_r0.002",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.7456490445454592,
+   "SHOT_NOISE": 0.14844826315586432,
+   "READOUT": 0.1059026922986765
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.008_r0.01",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.5261096199881575,
+   "READOUT": 0.3691493361009731,
+   "SHOT_NOISE": 0.10474104391086941
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.008_r0.03",
+  "budget_shares": {
+   "READOUT": 0.6301004399046568,
+   "GATE_STOCHASTIC": 0.30848460361879926,
+   "SHOT_NOISE": 0.061414956476544005
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.008_r0.08",
+  "budget_shares": {
+   "READOUT": 0.8081222096884119,
+   "GATE_STOCHASTIC": 0.16002004455551266,
+   "SHOT_NOISE": 0.03185774575607553
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.02_r0.002",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.8758835278139132,
+   "SHOT_NOISE": 0.07243878715584667,
+   "READOUT": 0.05167768503024008
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.02_r0.01",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.727704316440272,
+   "READOUT": 0.21211186183336816,
+   "SHOT_NOISE": 0.06018382172635991
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.02_r0.03",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.5178072686570556,
+   "READOUT": 0.43936816696779624,
+   "SHOT_NOISE": 0.04282456437514812
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.02_r0.08",
+  "budget_shares": {
+   "READOUT": 0.6595928165045223,
+   "GATE_STOCHASTIC": 0.3144047546563583,
+   "SHOT_NOISE": 0.026002428839119393
+  },
+  "winner": "REM + ZNE"
+ },
+ {
+  "label": "g0.05_r0.002",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.941413717052782,
+   "SHOT_NOISE": 0.03419303824800037,
+   "READOUT": 0.024393244699217692
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.05_r0.01",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.8588626716372997,
+   "READOUT": 0.10994262230614148,
+   "SHOT_NOISE": 0.031194706056558826
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.05_r0.03",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.7097414387534234,
+   "READOUT": 0.26448007966946363,
+   "SHOT_NOISE": 0.025778481577113013
+  },
+  "winner": "CDR (Clifford regression)"
+ },
+ {
+  "label": "g0.05_r0.08",
+  "budget_shares": {
+   "GATE_STOCHASTIC": 0.5108141020073594,
+   "READOUT": 0.47063264578144887,
+   "SHOT_NOISE": 0.018553252211191577
+  },
+  "winner": "CDR (Clifford regression)"
+ }
+]

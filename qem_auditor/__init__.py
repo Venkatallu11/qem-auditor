@@ -24,6 +24,8 @@ from .agent import AuditAgent, Investigation
 from .llm_scientist import LLMAdversary
 from .failure_modes import Diagnosis, FailureAnalysis, classify
 from .prescribe import Consult, ErrorBudget, ErrorSource, Prescription, prescribe
+from .predict import (Predictor, Prediction, TrainingCase, Validation,
+                      cross_validate)
 from .corpus import (Corpus, Encounter, Expectation, MethodEffect,
                      encounter_from_report)
 from .devices import (PROFILES, Architecture, DeviceProfile, budget_for,
@@ -58,6 +60,7 @@ __all__ = [
     "DeviceLayout", "LayoutAdvice", "QubitProperties", "advise_layout",
     "Discrepancy", "NotReversible", "OracleReport", "audit_oracle", "evaluate",
     "preflight_gate",
+    "Predictor", "Prediction", "TrainingCase", "Validation", "cross_validate",
     "Corpus", "Encounter", "Expectation", "MethodEffect",
     "encounter_from_report",
     "PROFILES", "Architecture", "DeviceProfile", "budget_for", "profile",

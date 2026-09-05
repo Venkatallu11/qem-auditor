@@ -35,6 +35,8 @@ jobs:
           # And again with a corpus, so the accumulate-and-recall path runs.
           python -m qem_auditor analyze --store /tmp/corpus /tmp/counts.json
           test -f /tmp/corpus/corpus.json
+      # V4: the predictor, and the leave-one-out check that refuses it.
+      - run: python examples/knowledge_model.py
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json

@@ -917,6 +917,59 @@ Every `qem-auditor analyze` run feeds it. That is the honest route to a
 knowledge model: a corpus first, predictions only once there is something
 to predict from.
 
+### V4: the knowledge model, and its own refutation
+
+Circuit and noise characteristics in, predicted best method out. Building
+that is the easy half. A predictor nobody has validated is **worse than
+no predictor** — it answers every question confidently, and from the
+inside there is no way to tell whether it learned anything or is
+repeating whatever the training set contained most.
+
+So `qem_auditor.predict` ships with the refutation attached. Trained on
+**sixteen measured noise regimes** — a 4×4 grid over two-qubit and
+readout error, every method actually run on H2, winner recorded against
+the known energy:
+
+```
+ 7x  CDR (Clifford regression)
+ 6x  REM + ZNE
+ 3x  REM (readout)
+```
+
+The winner is not constant, so there is something to learn. Does it?
+
+```
+leave-one-out over 16 measured cases
+  predictor 31.2%
+  always saying 'CDR (Clifford regression)': 43.8%
+  skill -12.5%
+```
+
+**No.** The predictor is worse than ignoring every feature. That is the
+honest V4 result, and it ships as the headline rather than being tuned
+away — sixteen cases split three ways is five per class, and
+nearest-neighbour voting on five examples is noise.
+
+The fix is more measured cases, not a cleverer model. A cleverer model on
+a corpus this size fits the noise and reports a better number, which is
+how a knowledge model starts lying.
+
+**The baseline was nearly rigged, in my favour.** The first version
+refit the majority class per fold, which looks more even-handed. On a
+corpus split 7/6/3 it is not: removing one member of the leading class
+hands the majority to a rival, so the "baseline" scored **0 of 16** where
+always naming the most common winner scores 7. Publishing that would have
+shown the predictor beating a strawman of its own making. A test now pins
+the corrected baseline and the pathology.
+
+And it refuses outside what it has seen:
+
+```
+no prediction: the closest budget seen is only 0.05 similar to this one
+(need 0.75). This is outside what the corpus has measured, and guessing
+here is how a model earns trust it has not been given.
+```
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1491,6 +1544,7 @@ qem_auditor/
   control.py        strip the mechanism, keep the rest: is the effect real?
   results.py        counts you already have: the floor, and what beats it
   corpus.py         what a run leaves behind when nobody knows the answer
+  predict.py        the knowledge model, and the check that refuses it
   devices.py        IBM, IonQ, Quantinuum, Rigetti: what differs, what doesn't
   engine.py         results table -> a recommendation, with the reason
   service.py        the six tools the MCP server exposes
