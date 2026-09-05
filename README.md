@@ -825,6 +825,48 @@ Validated against 2,500 resampled experiments: predicted amplification
 And it names what's missing rather than only what failed — *"submit
 counts at fold 3 and 5 and we can run ZNE"*, not *"ZNE unavailable"*.
 
+### Six machines, and what honestly changes between them
+
+This project spent its whole life calibrated against one IBM Eagle chip.
+`qem_auditor.devices` carries profiles for **IBM** (Eagle, Heron),
+**IonQ** (Aria, Forte), **Quantinuum** (H2) and **Rigetti** (Ankaa-3),
+across superconducting and trapped-ion architectures — and running the
+same circuit on all six produced a finding I did not expect.
+
+**Connectivity is the large, reliable difference.** A nearest-neighbour
+chip runs a longer circuit than the one you wrote, because distant
+entangling gates become SWAP chains:
+
+```
+IBM Eagle r3      100 written -> 250 executed
+IonQ Forte        100 written -> 100 executed   (all-to-all, nothing added)
+Quantinuum H2     100 written -> 100 executed   (all-to-all, nothing added)
+```
+
+**The recommended method does not change.** I expected it to flip between
+vendors and wrote that claim down before checking. The output refused it:
+CDR tops the ranking on all six, because it covers enough sources to win
+everywhere. Only the *third*-place method tracks the readout/gate split.
+A test pins this, so if a catalogue change ever makes the top method
+genuinely vendor-dependent, it fails and the write-up gets revised with it.
+
+**What changes is the shape of the budget**, and that is what should
+change your plan — usually toward something that is not a mitigation
+method at all:
+
+| machine | shot | readout | gate | decoherence | so do this |
+|---|---|---|---|---|---|
+| Quantinuum H2 | **22%** | 40% | 35% | 3% | take more shots |
+| IBM Eagle r3 | 3% | 45% | 22% | **30%** | shorter circuits, better qubits |
+| Rigetti Ankaa-3 | 2% | 28% | **56%** | 14% | fewer entangling gates |
+
+These are **dated, representative public figures for comparing
+architectures** — not measurements of the machine you are about to run
+on. Every profile carries `as_of` and `source` as mandatory fields,
+because a device number with no date is a claim with no evidence.
+`profile.replace(...)` takes your own calibration, and every function
+accepts a profile you built yourself.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1398,6 +1440,7 @@ qem_auditor/
   reversible.py     does the circuit compute what its author said?
   control.py        strip the mechanism, keep the rest: is the effect real?
   results.py        counts you already have: the floor, and what beats it
+  devices.py        IBM, IonQ, Quantinuum, Rigetti: what differs, what doesn't
   engine.py         results table -> a recommendation, with the reason
   service.py        the six tools the MCP server exposes
   layout.py         which qubits to run on, weighted by the budget

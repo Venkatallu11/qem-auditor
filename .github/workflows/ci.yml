@@ -109,6 +109,9 @@ jobs:
       # A circuit from outside this project, with a specification attached:
       # the correctness gate that has to pass before mitigation is a question.
       - run: python examples/audit_an_oracle.py
+      # Six machines, two architectures: what changes between vendors and
+      # what -- honestly -- does not.
+      - run: python examples/across_vendors.py
       # The control experiment, ported from quantum-verifier, plus the two
       # bars that say which of its numbers are findings.
       - run: python examples/control_experiment.py
