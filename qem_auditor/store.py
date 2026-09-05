@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .corpus import Corpus, Encounter
 from .ledger import EvidenceLedger, Observation
 from .memory import CaseMemory, CircuitFingerprint, PastCase, case_from_audit
 
@@ -34,6 +35,7 @@ DEFAULT_DIRECTORY = "~/.qem-auditor"
 
 MEMORY_FILE = "memory.json"
 LEDGER_FILE = "ledger.json"
+CORPUS_FILE = "corpus.json"
 
 
 def default_directory() -> Path:
@@ -52,6 +54,7 @@ class Store:
     directory: Optional[Path] = None
     memory: CaseMemory = field(default_factory=CaseMemory)
     ledger: EvidenceLedger = field(default_factory=EvidenceLedger)
+    corpus: Corpus = field(default_factory=Corpus)
 
     @classmethod
     def open(cls, directory=None) -> "Store":
@@ -59,7 +62,8 @@ class Store:
         path = Path(directory).expanduser() if directory else default_directory()
         return cls(directory=path,
                    memory=CaseMemory.load(path / MEMORY_FILE),
-                   ledger=EvidenceLedger.load(path / LEDGER_FILE))
+                   ledger=EvidenceLedger.load(path / LEDGER_FILE),
+                   corpus=Corpus.load(path / CORPUS_FILE))
 
     @classmethod
     def ephemeral(cls) -> "Store":
@@ -81,6 +85,7 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.memory.save(self.directory / MEMORY_FILE)
         self.ledger.save(self.directory / LEDGER_FILE)
+        self.corpus.save(self.directory / CORPUS_FILE)
         return True
 
     # -- what an audit puts in ----------------------------------------
@@ -91,6 +96,16 @@ class Store:
 
     def record_outcome(self, observation: Observation) -> bool:
         return self.ledger.record(observation)
+
+    def record_encounter(self, encounter: Encounter) -> bool:
+        """Keep what a hardware analysis left behind.
+
+        Separate from `record_outcome` because it is a weaker kind of
+        evidence: an encounter has no known answer, so it records what a
+        method DID and never whether it helped. Mixing the two would let
+        truth-free data masquerade as a measured outcome.
+        """
+        return self.corpus.record(encounter)
 
     def summarise(self) -> str:
         where = str(self.directory) if self.persistent else "in memory only"

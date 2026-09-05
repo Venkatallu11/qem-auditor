@@ -204,6 +204,22 @@ def _cmd_analyze(args) -> int:
 
     print(f"RESULTS  {args.path}")
     print(report.format_report())
+
+    # An analysis with no known answer still leaves evidence behind: what
+    # each method DID, and what it cost. One run cannot say whether that
+    # was typical. A corpus of them can, which is the only claim made here.
+    store = _open_store(args)
+    if store is not None:
+        from .corpus import encounter_from_report
+
+        width = len(next(iter(next(iter(bundle["measurements"].values())))))
+        encounter = encounter_from_report(
+            report, n_qubits=width, device=bundle.get("device", "unstated"))
+        print()
+        print(store.corpus.report_on(encounter))
+        if store.record_encounter(encounter):
+            store.save()
+
     return EXIT_NOT_CERTIFIED if report.claim_is_impossible else EXIT_OK
 
 
@@ -623,6 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
                            help="a JSON bundle of counts; omit with --template")
     p_analyze.add_argument("--template", action="store_true",
                            help="print an example bundle to fill in")
+    _add_store_arguments(p_analyze)
     p_analyze.set_defaults(func=_cmd_analyze_or_template)
 
     p_template = sub.add_parser("template", help="print a blank record to fill in")

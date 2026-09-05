@@ -31,7 +31,10 @@ jobs:
       # The hardware door: counts in, verdict out, no qiskit needed.
       - run: |
           python -m qem_auditor analyze --template > /tmp/counts.json
-          python -m qem_auditor analyze /tmp/counts.json
+          python -m qem_auditor analyze --no-store /tmp/counts.json
+          # And again with a corpus, so the accumulate-and-recall path runs.
+          python -m qem_auditor analyze --store /tmp/corpus /tmp/counts.json
+          test -f /tmp/corpus/corpus.json
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json

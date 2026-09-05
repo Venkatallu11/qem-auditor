@@ -872,6 +872,51 @@ because a device number with no date is a claim with no evidence.
 `profile.replace(...)` takes your own calibration, and every function
 accepts a profile you built yourself.
 
+### The corpus: evidence without a known answer
+
+The ledger records outcomes, but its `Observation` needs `raw_error` and
+`mitigated_error` — it needs **the truth**. That works for a benchmark
+molecule and is useless for the person this project is most for, who ran
+something on hardware precisely because nobody knows what it should give.
+
+So `qem_auditor.corpus` records a different thing, and the difference is
+the whole design: **an encounter records what a method DID, never whether
+it helped.** Without ground truth, "helped" is unavailable, and inferring
+it anyway would manufacture the conclusion this package exists to
+withhold.
+
+What *is* available, and gets kept: the shot-noise floor, how far each
+method moved the estimate, what it cost in amplified noise, and whether
+the claimed uncertainty was below the floor.
+
+None of that ranks methods. What it builds is an **expectation** — and
+that is what turns one run into evidence:
+
+```
+corpus: 8 encounters recorded, 8 comparable to this one
+REM (tensored): over 8 comparable runs it typically moved the estimate
+  by +0.009013, costing 1.15x in shot noise
+  -> this run moved +0.0453, 5.0x the usual. Worth a look: not wrong,
+     but not typical either
+```
+
+That flag is a **drifted readout on one qubit**, caught with no known
+answer anywhere in the calculation. No amount of staring at the single
+run reveals it. The corpus is an anomaly detector, not a leaderboard —
+and a test asserts the report never says a run was *wrong*, *invalid*,
+*better* or *worse*, because truth-free data cannot support any of those
+words.
+
+Two rules hold it there. It **refuses to summarise** below 5 comparable
+runs. And it **stays on your machine** — plain JSON in the local store,
+written only when you ask, and it keeps no counts and no bitstrings, only
+the derived quantities above, so a corpus cannot leak the data it learned
+from.
+
+Every `qem-auditor analyze` run feeds it. That is the honest route to a
+knowledge model: a corpus first, predictions only once there is something
+to predict from.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1445,6 +1490,7 @@ qem_auditor/
   reversible.py     does the circuit compute what its author said?
   control.py        strip the mechanism, keep the rest: is the effect real?
   results.py        counts you already have: the floor, and what beats it
+  corpus.py         what a run leaves behind when nobody knows the answer
   devices.py        IBM, IonQ, Quantinuum, Rigetti: what differs, what doesn't
   engine.py         results table -> a recommendation, with the reason
   service.py        the six tools the MCP server exposes
