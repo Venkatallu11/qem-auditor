@@ -166,12 +166,18 @@ def main() -> int:
     print(f"    the fraud tops the accuracy table and is caught anyway "
           f"({cheat[0][1]:.4f}, sensitivity 0.02)")
     print("    the dressed identity returns exactly the unmitigated value")
-    print(f"    REM + ZNE is the best honest method ({best[1]:.4f} here, "
-          "1.56 kcal/mol on H2)")
+    # The NAME comes from the run too. This line read "REM + ZNE is the
+    # best honest method" beside a number pulled from the data, and when
+    # the catalogue grew the number became vnCDR's while the name stayed
+    # REM + ZNE -- a sentence half measured and half remembered, which
+    # is worse than one that is wholly either.
+    print(f"    the best honest method here is {best[0]} at {best[1]:.4f}, "
+          f"{raw / best[1]:.1f}x better than raw")
     print("    PEC underperforms wherever its assumed model is not the real one")
     print("\n  What did not:")
     print("    readout dominance, which was a fact about a two-gate circuit")
-    print("    the size of the gains -- 2.6x here against 23x on H2")
+    print(f"    the size of the gains -- {raw / best[1]:.1f}x here against 23x "
+          "on H2, and which method gets there is not stable either")
 
     if cheat and best[1] <= cheat[0][1]:
         print("\n  FAILED: the fraud did not top the accuracy table, so this "

@@ -1195,23 +1195,34 @@ times.
 
 | method | TFIM (4 spins, 4 steps) | sensitivity |
 |---|---|---|
-| oracle peek (fraud) | *0.0082* | **0.020** |
-| REM + ZNE | **0.1581** | 0.539 |
-| CDR | 0.1801 | 1.090 |
-| REM | 0.2272 | 0.536 |
-| ZNE | 0.3463 | 1.142 |
-| PEC | 0.3491 | 1.041 |
-| unmitigated | 0.4095 | 1.000 |
-| dressed identity | 0.4095 | 1.000 |
+| oracle peek (fraud) | *0.0064* | **0.020** |
+| vnCDR | **0.0155** | 1.052 |
+| CDR | 0.0205 | 1.467 |
+| REM + ZNE | 0.0447 | 1.208 |
+| REM (readout) | 0.1329 | 1.115 |
+| REM (iterative) | 0.1329 | 1.115 |
+| REM (tensored) | 0.1399 | 1.114 |
+| ZNE (Richardson) | 0.2109 | 1.255 |
+| ZNE (fold 1,3,5) | 0.2406 | 1.065 |
+| PEC | 0.2565 | 1.041 |
+| unmitigated | 0.3206 | 1.000 |
+| dressed identity | 0.3206 | 1.000 |
+| Pauli twirling | 0.3585 | 0.754 |
+| symmetry verification | *refused* — no symmetry declared | — |
+| ZNE (exponential) | *refused* — decay ratio 1.059 is not a decay | — |
 
 **What held on both:** the fraud tops the accuracy table and is caught
-anyway; the dressed identity returns *exactly* the unmitigated value;
-REM+ZNE is the best honest method; PEC underperforms wherever its assumed
-model isn't the real one; symmetry verification correctly refuses where
-no symmetry exists.
+anyway; the dressed identity returns *exactly* the unmitigated value; PEC
+underperforms wherever its assumed model isn't the real one; symmetry
+verification correctly refuses where no symmetry exists.
 
-**What didn't:** readout dominance, and the size of the gains — 2.6x here
-against 23x on H2.
+**What didn't:** readout dominance; the size of the gains — 20.7x here
+against 23x on H2; and *which method gets there*. This table said "REM+ZNE
+is the best honest method" until the catalogue grew and vnCDR took the
+place — while the number beside the name was being read from the run and
+the name was being remembered from an older one. The example now prints
+both from the same run, because a sentence half measured and half
+remembered is worse than one that is wholly either.
 
 The second system also found two bugs. REM's confusion matrix was
 hardcoded 4×4 — fine on the only system it had ever run on, and a crash

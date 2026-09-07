@@ -165,7 +165,7 @@ class GeneralisationTest(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
 class RefactorTest(unittest.TestCase):
-    """Generalising the nine methods must not have moved H2's numbers.
+    """Generalising the catalogue must not have moved H2's numbers.
 
     Each was measured before the System abstraction existed, and each is
     a claim quoted in the README.
