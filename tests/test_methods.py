@@ -1,4 +1,5 @@
-"""Nine mitigation methods, and what the auditor is supposed to notice.
+"""Every mitigation method in the catalogue, and what the auditor is
+supposed to notice about them.
 
 These pin the qualitative findings of examples/method_shootout.py. They
 use fewer seeds than the example, because what is being asserted is which
@@ -422,3 +423,105 @@ class CatalogueTest(unittest.TestCase):
         be in FITTING_METHODS or it escapes the check silently."""
         for name in ("ZNE (exponential)", "ZNE (Richardson)", "vnCDR"):
             self.assertIn(name, M.FITTING_METHODS, name)
+
+
+@unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
+class HeldOutValidationTest(unittest.TestCase):
+    """A held-out check is only worth anything if it validates the model
+    the method actually uses.
+
+    For a while every non-CDR method here was validated by fitting a
+    straight line through the folds, which meant the exponential and
+    Richardson extrapolators were being asked a question about a model
+    neither of them uses -- a pass that certified nothing and a failure
+    that would have blamed the wrong assumption.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.backend = AerSimulator(noise_model=invented_noise())
+
+    def factory(self):
+        return M.Sampler(self.backend, SHOTS, 101)
+
+    def test_the_exponential_extrapolator_is_validated_by_an_exponential(self):
+        seen = []
+        original = M._exponential_fit
+
+        def spy(scales, values):
+            seen.append(list(scales))
+            return original(scales, values)
+
+        M._exponential_fit = spy
+        try:
+            M.heldout_ok("ZNE (exponential)", self.factory, 5.0)
+        finally:
+            M._exponential_fit = original
+        # Fitted on the three upper folds and asked about the withheld
+        # lowest one: an extrapolation, in the direction production uses.
+        self.assertEqual(seen, [[3, 5, 7]])
+
+    def test_richardson_keeps_a_degree_of_freedom_in_the_held_out_fit(self):
+        seen = {}
+        original = M._folded_energies
+
+        def spy(sampler, folds, process, **kwargs):
+            seen["folds"] = list(folds)
+            return original(sampler, folds, process, **kwargs)
+
+        M._folded_energies = spy
+        try:
+            M.heldout_ok("ZNE (Richardson)", self.factory, 5.0)
+        finally:
+            M._folded_energies = original
+        # Five measured, four fitted with a quadratic, one withheld. A
+        # quadratic through three points is interpolation wearing a
+        # fit's clothes, which is the thing this method exists to avoid.
+        self.assertEqual(seen["folds"], [1, 3, 5, 7, 9])
+
+    def test_vncdr_is_validated_as_a_regression_not_an_extrapolation(self):
+        calls = []
+        original = M._heldout_extrapolation
+
+        def spy(*args, **kwargs):
+            calls.append(args)
+            return original(*args, **kwargs)
+
+        M._heldout_extrapolation = spy
+        try:
+            M.heldout_ok("vnCDR", self.factory, 5.0)
+        finally:
+            M._heldout_extrapolation = original
+        self.assertEqual(calls, [], "vnCDR fits a regression per fold; "
+                                    "validating it as a plain extrapolator "
+                                    "tests a method nobody proposed")
+
+    def test_a_refusal_on_the_held_out_data_is_not_a_pass(self):
+        """The tolerance is absurdly generous, so only a refusal can
+        make this False -- and a refusal must, because an unrun control
+        is not a passed one."""
+        original = M._exponential_fit
+
+        def refuse(scales, values):
+            raise ValueError("the model does not describe this data")
+
+        M._exponential_fit = refuse
+        try:
+            self.assertFalse(
+                M.heldout_ok("ZNE (exponential)", self.factory, 1e9))
+        finally:
+            M._exponential_fit = original
+
+
+@unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
+class ExponentialFitTest(unittest.TestCase):
+
+    def test_the_fit_can_be_evaluated_away_from_zero(self):
+        """Production wants the curve at zero; the held-out check wants
+        it at a fold it withheld. One fit, evaluated twice."""
+        offset, amplitude, ratio = M._exponential_fit(
+            [3, 5, 7], [1 + 2 * 0.5 ** x for x in (3, 5, 7)])
+        self.assertAlmostEqual(offset, 1.0, places=6)
+        self.assertAlmostEqual(ratio, 0.5, places=6)
+        self.assertAlmostEqual(offset + amplitude * ratio ** 1, 2.0, places=6)
+        self.assertAlmostEqual(offset + amplitude, 3.0, places=6)

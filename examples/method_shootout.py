@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Nine mitigation methods, two noise models, one auditor.
+"""Fifteen mitigation methods, two noise models, one auditor.
 
 The earlier examples audit zero-noise extrapolation, which is one method
 among many, and the finding there -- that readout error defeats ZNE
 because it does not scale with gate count -- immediately raises the
 question this file answers: what happens to everything else?
 
-So: nine methods, each with the same access to the device and none
-holding the exact answer, run under both the depolarizing model this
-project invented and IBM's MEASURED calibration of `fake_kyiv`. Two of
-the nine should not survive an audit, and are there to test whether the
-auditor can REFUSE rather than merely rank.
+So: every method in the catalogue, each with the same access to the
+device and none holding the exact answer, run under both the depolarizing
+model this project invented and IBM's MEASURED calibration of
+`fake_kyiv`. Two of them should not survive an audit, and are there to
+test whether the auditor can REFUSE rather than merely rank.
+
+A method may also refuse to answer at all -- the exponential
+extrapolator does exactly that when the folded values are not a decay,
+which is what happens on a noiseless backend. That is a legitimate
+outcome and is reported as one; what it is not is a licence to drop the
+seeds where the fit happened to work and average the rest.
 
 Three things come out of it, and only the first was expected:
 
@@ -42,7 +48,7 @@ from real_device_audit import calibration, device_noise  # noqa: E402
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0] + "/..")
 from benchmarks.methods import (FITTING_METHODS, METHODS, FCI,  # noqa: E402
-                                Sampler, data_sensitivity, error_kcal,
+                                Sampler, attempt, data_sensitivity, error_kcal,
                                 heldout_ok, is_deterministic, scramble_shift,
                                 unmitigated)
 
@@ -74,7 +80,20 @@ FRAUD = "oracle peek (fraud)"
 
 
 def errors_for(method, backend) -> list:
-    return [error_kcal(method(Sampler(backend, SHOTS, seed))) for seed in SEEDS]
+    """One error per seed, None where the method refused.
+
+    The caller decides what a refusal means. This deliberately does NOT
+    quietly drop the refusals: the seeds where an extrapolator's model
+    fit are the seeds where the data happened to look like the model,
+    so a median over the survivors is a median over a selected sample.
+    """
+    return [None if value is None else error_kcal(value)
+            for value in (attempt(method, Sampler(backend, SHOTS, seed))
+                          for seed in SEEDS)]
+
+
+def all_answered(errors) -> bool:
+    return all(value is not None for value in errors)
 
 
 def build_record(name, errors, baseline_errors, sensitivity, ideal_ok,
@@ -88,16 +107,25 @@ def build_record(name, errors, baseline_errors, sensitivity, ideal_ok,
         # Every one of these is measured in this run, not reported by the
         # method. A shootout where the contestants grade their own
         # controls is a leaderboard, not an audit.
-        ideal_control=ideal_ok,
-        adversarial_check=bool(sensitivity >= SENSITIVITY_FLOOR),
+        # None means the method refused under the control, so the
+        # control did not run. An unrun hard gate is not a pass, and
+        # writing True here because nothing visibly broke is how an
+        # untested claim becomes a certified one.
+        ideal_control=bool(ideal_ok),
+        adversarial_check=bool(sensitivity is not None
+                               and sensitivity >= SENSITIVITY_FLOOR),
         mitigation_benefit=bool(
             statistics.median(baseline_errors) / statistics.median(errors) >= 1.1),
         determinism_check=deterministic,
         heldout_check=heldout,
         extrapolation_in_domain=heldout,
     )
-    for control in ("ideal_control", "adversarial_check", "mitigation_benefit",
-                    "unitary_equivalence", "determinism_check"):
+    measured = ["mitigation_benefit", "unitary_equivalence", "determinism_check"]
+    if ideal_ok is not None:
+        measured.append("ideal_control")
+    if sensitivity is not None:
+        measured.append("adversarial_check")
+    for control in measured:
         controls.provenance[control] = Provenance.MEASURED
     if name in FITTING_METHODS:
         controls.provenance["heldout_check"] = Provenance.MEASURED
@@ -138,7 +166,14 @@ def build_record(name, errors, baseline_errors, sensitivity, ideal_ok,
                                             cross_submission=False, noise_model=False),
         ),
         real_hardware_full_validation=False,
-        notes=f"data sensitivity {sensitivity:.3f} (1.0 = as disturbed as the raw estimate)",
+        notes=(f"data sensitivity {sensitivity:.3f} "
+               "(1.0 = as disturbed as the raw estimate)"
+               if sensitivity is not None else
+               "data sensitivity not measured: the method refused on the "
+               "scrambled data, so there is no answer to test for "
+               "data-dependence")
+        + ("" if ideal_ok is not None else
+           "; ideal control unrun: the method refused with no noise to correct"),
     )
 
 
@@ -160,10 +195,14 @@ def main() -> int:
     for label, noise, source in models:
         backend = AerSimulator(noise_model=noise)
         baseline = errors_for(unmitigated, backend)
+        if not all_answered(baseline):
+            print(f"  the unmitigated baseline refused under {label}; "
+                  "there is nothing to compare against")
+            return 1
         # Measured once per backend, not once per method: the scrambled
         # baseline and the noiseless baseline are properties of the
-        # device, and recomputing them nine times is the same
-        # measurement repeated at nine times the cost.
+        # device, and recomputing them once per method is the same
+        # measurement repeated fifteen times.
         reference_shift = scramble_shift(unmitigated, backend, SHOTS,
                                          SENSITIVITY_SEEDS)
         noiseless_baseline = statistics.median(errors_for(unmitigated, noiseless))
@@ -175,13 +214,27 @@ def main() -> int:
 
         rows = []
         samples = {}
+        refusals = []
         for name, method in METHODS.items():
             errors = errors_for(method, backend)
+            if not all_answered(errors):
+                # A method that could not answer on every seed has no
+                # error to rank and no gain to quote. Reporting it as a
+                # refusal is the whole result; quietly averaging the
+                # seeds it survived would report a number nobody
+                # measured.
+                answered = sum(1 for e in errors if e is not None)
+                refusals.append((name, answered, len(errors)))
+                continue
             sensitivity = data_sensitivity(method, backend, SHOTS,
                                            SENSITIVITY_SEEDS, reference_shift)
-            # The ideal control: does the method break with no noise to correct?
-            ideal = statistics.median(errors_for(method, noiseless))
-            ideal_ok = ideal < 10 * noiseless_baseline
+            # The ideal control: does the method break with no noise to
+            # correct? A refusal here is neither a pass nor a break --
+            # the method declined to produce the estimate the control
+            # was going to examine -- so it is recorded as unrun.
+            ideal_errors = errors_for(method, noiseless)
+            ideal_ok = (statistics.median(ideal_errors) < 10 * noiseless_baseline
+                        if all_answered(ideal_errors) else None)
             deterministic = is_deterministic(method, backend, SHOTS, SEEDS[0])
             # A method that fits something owes a held-out check, run in
             # the direction it actually predicts. A method that fits
@@ -200,9 +253,17 @@ def main() -> int:
             samples[name] = errors
 
         for name, error, gain, sensitivity, verdict in sorted(rows, key=lambda r: r[1]):
-            flag = "" if sensitivity >= SENSITIVITY_FLOOR else "  <-- not reading the data"
-            print(f"  {name:27s} {error:9.3f} {gain:6.2f}x {sensitivity:7.3f}  "
+            if sensitivity is None:
+                shown, flag = "refused", "  <-- attack not run"
+            elif sensitivity >= SENSITIVITY_FLOOR:
+                shown, flag = f"{sensitivity:.3f}", ""
+            else:
+                shown, flag = f"{sensitivity:.3f}", "  <-- not reading the data"
+            print(f"  {name:27s} {error:9.3f} {gain:6.2f}x {shown:>7s}  "
                   f"{verdict.value}{flag}")
+        for name, answered, total in refusals:
+            print(f"  {name:27s} {'refused':>9s} {'':7s} {'':7s}  "
+                  f"answered {answered}/{total} runs, so no estimate is quoted")
         # A printed order invites the reader to believe the order. Say
         # which parts of it the runs actually establish, and which are
         # the same number twice.

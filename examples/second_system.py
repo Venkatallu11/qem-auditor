@@ -38,8 +38,8 @@ from real_device_audit import (ECR_DURATION, SX_DURATION,  # noqa: E402
                                calibration, device_noise)
 
 from benchmarks import tfim  # noqa: E402
-from benchmarks.methods import (METHODS, Sampler, ScrambledSampler,  # noqa: E402
-                                h2_system, unmitigated)
+from benchmarks.methods import (METHODS, REFUSALS, Sampler,  # noqa: E402
+                                ScrambledSampler, h2_system, unmitigated)
 from qem_auditor.prescribe import budget_from_calibration, prescribe  # noqa: E402
 
 SHOTS = 20_000
@@ -131,26 +131,35 @@ def main() -> int:
 
     rows = []
     for name, method in METHODS.items():
+        # Refusals are reported, not skipped, and the reason is the
+        # method's own: symmetry verification needs a symmetry nobody
+        # declared here, while an extrapolator refuses when its model
+        # does not describe the folded values. Printing one reason for
+        # both would be inventing the second.
         try:
             rows.append((name, median_error(method, system, full),
-                         sensitivity(method, system, full, reference_shift)))
-        except ValueError:
-            rows.append((name, None, None))
+                         sensitivity(method, system, full, reference_shift),
+                         None))
+        except REFUSALS as refusal:
+            rows.append((name, None, None, str(refusal)))
 
-    raw = next(e for n, e, _ in rows if n == "unmitigated")
+    raw = next(e for n, e, _, _ in rows if n == "unmitigated")
     print(f"\n  {'method':28s} {'error':>9s} {'gain':>7s} {'sensitivity':>12s}")
     print("  " + "-" * 62)
-    for name, error, sens in sorted(rows, key=lambda r: (r[1] is None, r[1])):
+    # Sorting on the error alone compares None with None as soon as two
+    # methods refuse, which is a TypeError rather than a table.
+    for name, error, sens, refusal in sorted(
+            rows, key=lambda r: (r[1] is None, r[1] if r[1] is not None else 0.0)):
         if error is None:
-            print(f"  {name:28s}       n/a -- declares no symmetry here")
+            print(f"  {name:28s}   refused -- {refusal[:38]}")
             continue
         flag = "" if sens >= SENSITIVITY_FLOOR else "  <-- not reading the data"
         print(f"  {name:28s} {error:9.4f} {raw / error:6.2f}x {sens:12.3f}{flag}")
 
-    honest = [(n, e) for n, e, s in rows
+    honest = [(n, e) for n, e, s, _ in rows
               if e is not None and s is not None and s >= SENSITIVITY_FLOOR]
     best = min(honest, key=lambda r: r[1])
-    cheat = [(n, e) for n, e, s in rows
+    cheat = [(n, e) for n, e, s, _ in rows
              if e is not None and s is not None and s < SENSITIVITY_FLOOR]
 
     print("\n  What held on both systems:")

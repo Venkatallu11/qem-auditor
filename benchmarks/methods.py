@@ -726,8 +726,14 @@ def oracle_peek(sampler: Sampler, blend: float = 0.98) -> float:
 # present, and each can refuse.
 
 
-def _exponential_to_zero(scales, values) -> float:
-    """Fit a + B*R**x through equally spaced points and evaluate at zero.
+def _exponential_fit(scales, values):
+    """Fit a + B*R**x through equally spaced points.
+
+    Returns (offset, amplitude, ratio), so the caller can evaluate the
+    fitted curve wherever it needs to -- at zero for production, at a
+    held-out scale for validation. Splitting the fit from the evaluation
+    is what lets the held-out check test THIS model rather than a linear
+    stand-in for it.
 
     Gate error compounds multiplicatively, so an expectation value
     decays toward its noise floor exponentially rather than
@@ -757,6 +763,13 @@ def _exponential_to_zero(scales, values) -> float:
             "behaving the way this model assumes")
     amplitude = first / (ratio ** scales[1] - ratio ** scales[0])
     offset = values[0] - amplitude * ratio ** scales[0]
+    return float(offset), float(amplitude), float(ratio)
+
+
+def _exponential_to_zero(scales, values) -> float:
+    """The fitted curve at zero noise, which is ratio**0 == 1 times the
+    amplitude above the floor."""
+    offset, amplitude, _ = _exponential_fit(scales, values)
     return float(offset + amplitude)
 
 
@@ -1081,6 +1094,96 @@ FITTING_METHODS = ("ZNE (fold 1,3,5)", "REM + ZNE", "CDR (Clifford regression)",
                    "ZNE (exponential)", "ZNE (Richardson)", "vnCDR")
 
 
+def _folded_energies(sampler, folds, process, seed_base: int = 500) -> dict:
+    """Measure the target circuit at each fold factor, once."""
+    return {f: sampler.energy(process(
+        sampler(fold_cx(sampler.circuit, f), seed_offset=seed_base + 10 * i)))
+        for i, f in enumerate(folds)}
+
+
+def _heldout_extrapolation(sampler, name: str, calibration_shots: int) -> float:
+    """Hold out the LOWEST fold, fit the rest with the method's own model,
+    and predict the point that was withheld.
+
+    Production extrapolates BELOW every fold it measured, so a held-out
+    check that interpolates would validate a direction nobody uses. The
+    model matters as much as the direction: an exponential extrapolator
+    validated by a straight line has been told nothing about itself.
+    """
+    # The same readout correction the method itself applies, or none if
+    # it applies none.
+    if name == "REM + ZNE":
+        inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
+
+        def process(tables):
+            return [_apply_readout_correction(t, inverse) for t in tables]
+    else:
+        def process(tables):
+            return tables
+
+    if name == "ZNE (exponential)":
+        # Four folds so three remain to fit an exponential, and equally
+        # spaced so the closed-form fit applies.
+        folds = [1, 3, 5, 7]
+        measured = _folded_energies(sampler, folds, process)
+        fitted = folds[1:]
+        offset, amplitude, ratio = _exponential_fit(
+            fitted, [measured[f] for f in fitted])
+        predicted = offset + amplitude * ratio ** folds[0]
+    elif name == "ZNE (Richardson)":
+        # Five folds so a quadratic through four of them still has a
+        # residual; a quadratic through three would be interpolation
+        # wearing a fit's clothes, exactly what this method avoids.
+        folds = [1, 3, 5, 7, 9]
+        measured = _folded_energies(sampler, folds, process)
+        fitted = folds[1:]
+        predicted = np.polyval(
+            np.polyfit(fitted, [measured[f] for f in fitted], 2), folds[0])
+    else:
+        folds = [1, 3, 5]
+        measured = _folded_energies(sampler, folds, process)
+        fitted = folds[1:]
+        predicted = np.polyval(
+            np.polyfit(fitted, [measured[f] for f in fitted], 1), folds[0])
+    return abs(predicted - measured[folds[0]]) * sampler.system.unit_scale
+
+
+def _heldout_regression(sampler, name: str) -> float:
+    """Hold out one Clifford angle and predict it from the others.
+
+    CDR learns one regression on the unfolded data; vnCDR learns one per
+    fold and extrapolates the corrected values. Both are run here exactly
+    as production runs them, on a circuit whose answer is known and whose
+    data the fit never saw.
+    """
+    variants = list(sampler.system.clifford_variants)
+    if len(variants) < 3:
+        raise ValueError("holding one variant out needs two left to fit")
+    (held_circuit, held_truth), fitted = variants[0], variants[1:]
+    truths = [t for _, t in fitted]
+
+    if name == "CDR (Clifford regression)":
+        noisy = [sampler.energy(sampler(c, seed_offset=300 + 10 * i))
+                 for i, (c, _) in enumerate(fitted)]
+        slope, intercept = np.polyfit(noisy, truths, 1)
+        predicted = slope * sampler.energy(
+            sampler(held_circuit, seed_offset=400)) + intercept
+    else:
+        folds = (1, 3)
+        corrected = []
+        for i, factor in enumerate(folds):
+            noisy = [sampler.energy(sampler(fold_cx(c, factor),
+                                            seed_offset=300 + 10 * i + j,
+                                            calibration=True))
+                     for j, (c, _) in enumerate(fitted)]
+            slope, intercept = np.polyfit(noisy, truths, 1)
+            raw = sampler.energy(sampler(fold_cx(held_circuit, factor),
+                                         seed_offset=400 + 10 * i))
+            corrected.append(slope * raw + intercept)
+        predicted = np.polyval(np.polyfit(folds, corrected, 1), 0.0)
+    return abs(predicted - held_truth) * sampler.system.unit_scale
+
+
 def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,
                calibration_shots: int = 8_000) -> bool:
     """Predict a point that was withheld from the fit, in the direction
@@ -1088,44 +1191,29 @@ def heldout_ok(name: str, sampler_factory, tolerance_kcal: float,
 
     For the extrapolators that means holding out the LOWEST fold and
     fitting only the ones above it, so the prediction is an extrapolation
-    like the one production makes. For CDR it means holding out one
-    Clifford angle and predicting it from the others.
+    like the one production makes. For CDR and vnCDR it means holding out
+    one Clifford angle and predicting it from the others.
 
     The check runs the method's OWN pipeline. Validating REM + ZNE with
     plain ZNE would test a method nobody proposed and condemn one for a
     failure that is not its own -- which is what this did on its first
     version, caught by REM + ZNE landing INVALID while being the most
-    accurate honest method in the shootout.
+    accurate honest method in the shootout. The same trap reopened when
+    the catalogue grew: for a while every non-CDR method was validated by
+    a straight line, so the exponential and Richardson extrapolators were
+    being asked about a model neither of them uses.
+
+    A method that REFUSES on the held-out data has not validated
+    anything, so this is False rather than an exception: the caller is
+    recording whether a control passed, and an unrun control is not a
+    pass.
     """
     sampler = sampler_factory()
-    if name == "CDR (Clifford regression)":
-        variants = list(sampler.system.clifford_variants)
-        held, fitted = variants[0], variants[1:]
-        noisy = [sampler.energy(sampler(c, seed_offset=300 + 10 * i))
-                 for i, (c, _) in enumerate(fitted)]
-        slope, intercept = np.polyfit(noisy, [t for _, t in fitted], 1)
-        predicted = slope * sampler.energy(
-            sampler(held[0], seed_offset=400)) + intercept
-        error = abs(predicted - held[1]) * sampler.system.unit_scale
-    else:
-        # The same readout correction the method itself applies, or none
-        # if it applies none.
-        if name == "REM + ZNE":
-            inverse = np.linalg.pinv(_confusion_matrix(sampler, calibration_shots))
-
-            def process(tables):
-                return [_apply_readout_correction(t, inverse)
-                        for t in tables]
+    try:
+        if name in ("CDR (Clifford regression)", "vnCDR"):
+            error = _heldout_regression(sampler, name)
         else:
-            def process(tables):
-                return tables
-
-        folds = [1, 3, 5]
-        measured = {f: sampler.energy(process(
-            sampler(fold_cx(sampler.circuit, f), seed_offset=500 + 10 * i)))
-            for i, f in enumerate(folds)}
-        fitted = folds[1:]
-        predicted = np.polyval(
-            np.polyfit(fitted, [measured[f] for f in fitted], 1), folds[0])
-        error = abs(predicted - measured[folds[0]]) * sampler.system.unit_scale
+            error = _heldout_extrapolation(sampler, name, calibration_shots)
+    except REFUSALS:
+        return False
     return bool(error <= tolerance_kcal)
