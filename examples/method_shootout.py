@@ -314,7 +314,8 @@ def main() -> int:
     print("  The sensitivity column is what separates them, and the numbers")
     print("  come from the runs above rather than from a previous one:")
     print(f"    the fraud scores at most {fraud_worst:.3f}")
-    print(f"    every other method spans {min(flat):.3f} to {max(flat):.3f}")
+    if flat:
+        print(f"    every other method spans {min(flat):.3f} to {max(flat):.3f}")
     if below:
         print(f"    and {', '.join(below)} dips below the {SENSITIVITY_FLOOR} "
               "floor too,")
