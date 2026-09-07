@@ -296,9 +296,31 @@ def main() -> int:
             print(f"    {'':24s} indistinguishable from the fraud on accuracy: "
                   f"{', '.join(others)}")
     print()
-    print("  The sensitivity column is what separates them, and it is not close:")
-    print("  the fraud scores 0.020 against 0.6-1.1 for everything real. An")
-    print("  auditor that ranked on accuracy would have nothing to say here.")
+    # Measured from the rows just printed rather than quoted from a
+    # previous run. This paragraph read "0.020 against 0.6-1.1 for
+    # everything real" until the catalogue grew a method that scores
+    # 0.280 -- a sentence that had been true and quietly stopped being
+    # true, which is the failure mode this whole package is about.
+    scores = {}
+    for rows in table.values():
+        for name, _, _, sensitivity, _ in rows:
+            if sensitivity is not None:
+                scores.setdefault(name, []).append(sensitivity)
+    fraud_worst = max(scores.get(FRAUD, [0.0]))
+    others = {name: vs for name, vs in scores.items() if name != FRAUD}
+    below = sorted({name for name, vs in others.items()
+                    if min(vs) < SENSITIVITY_FLOOR})
+    flat = [v for vs in others.values() for v in vs]
+    print("  The sensitivity column is what separates them, and the numbers")
+    print("  come from the runs above rather than from a previous one:")
+    print(f"    the fraud scores at most {fraud_worst:.3f}")
+    print(f"    every other method spans {min(flat):.3f} to {max(flat):.3f}")
+    if below:
+        print(f"    and {', '.join(below)} dips below the {SENSITIVITY_FLOOR} "
+              "floor too,")
+        print("    which the audit records as a failed control rather than as")
+        print("    a reason to move the floor")
+    print("  An auditor that ranked on accuracy would have nothing to say here.")
     print("=" * 78)
     return 0
 

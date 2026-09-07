@@ -386,12 +386,19 @@ alone; with `pip install 'qem-auditor[devices]'` a test compares the
 pinned copy against the live snapshot, because a pinned number that
 drifts from its source is a transcription claiming to be a measurement.
 
-### Nine methods, two noise models, one auditor
+### Fifteen methods, two noise models, one auditor
 
-ZNE is one method among many, so `benchmarks/methods.py` implements nine
-and `examples/method_shootout.py` audits all of them. Each gets the same
-access to the device — circuits in, counts out — and none holds the exact
-answer. Two of the nine are there to be refused rather than ranked.
+ZNE is one method among many, so `benchmarks/methods.py` implements
+fifteen and `examples/method_shootout.py` audits all of them. Each gets
+the same access to the device — circuits in, counts out — and none holds
+the exact answer. Two of them are there to be refused rather than ranked.
+
+The table below is the nine-method run, quoted with the spread it was
+measured with. The six added since — exponential and Richardson ZNE,
+vnCDR, tensored and iterative readout mitigation, Pauli twirling — are in
+the shootout output rather than here, because pasting numbers from a
+shorter run beside numbers from a longer one is the kind of quiet
+mismatch this package objects to.
 
 | method | invented noise | measured `fake_kyiv` |
 |---|---|---|
@@ -1132,11 +1139,14 @@ including `XYZ`, three measurement settings worked out automatically:
 | unmitigated | 0.0678 | 1.00x | 1.000 |
 | dressed identity | 0.0678 | 1.00x | 1.000 |
 
-Eight of nine methods run, with CDR's training circuits **generated**
-rather than demanded. The ninth — symmetry post-selection — refuses,
-because whether a state obeys a checkable symmetry is something a person
-asserts and no error budget reveals. Refusing is the correct answer, not
-a gap.
+Most of the catalogue runs, with CDR's training circuits **generated**
+rather than demanded. Symmetry post-selection refuses, because whether a
+state obeys a checkable symmetry is something a person asserts and no
+error budget reveals; an extrapolator refuses when the folded values are
+not the shape its model assumes. Refusing is the correct answer, not a
+gap — and every all-methods loop here is written to report a refusal
+rather than to break on one, which is a lesson that arrived through a
+red CI run.
 
 **And this found a real flaw in the fraud detector.** Scrambling a
 method's data scrambled its *calibration* too, so a calibrated method
