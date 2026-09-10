@@ -22,7 +22,7 @@ if HAVE_AER:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
-    from benchmarks.methods import (METHODS, Sampler, ScrambledSampler,
+    from benchmarks.methods import (METHODS, REFUSALS, Sampler, ScrambledSampler,
                                     TargetScrambledSampler, near_clifford_training,
                                     system_from_circuit, unmitigated)
 
@@ -80,7 +80,7 @@ class AnyCircuitTest(unittest.TestCase):
                     [cls.system.error(method(Sampler(cls.backend, SHOTS, s,
                                                      cls.system)))
                      for s in SEEDS])
-            except ValueError as refusal:
+            except REFUSALS as refusal:
                 cls.refusals[name] = str(refusal)
 
     def test_a_mixed_basis_observable_is_measured_rather_than_guessed(self):

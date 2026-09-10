@@ -386,12 +386,19 @@ alone; with `pip install 'qem-auditor[devices]'` a test compares the
 pinned copy against the live snapshot, because a pinned number that
 drifts from its source is a transcription claiming to be a measurement.
 
-### Nine methods, two noise models, one auditor
+### Fifteen methods, two noise models, one auditor
 
-ZNE is one method among many, so `benchmarks/methods.py` implements nine
-and `examples/method_shootout.py` audits all of them. Each gets the same
-access to the device — circuits in, counts out — and none holds the exact
-answer. Two of the nine are there to be refused rather than ranked.
+ZNE is one method among many, so `benchmarks/methods.py` implements
+fifteen and `examples/method_shootout.py` audits all of them. Each gets
+the same access to the device — circuits in, counts out — and none holds
+the exact answer. Two of them are there to be refused rather than ranked.
+
+The table below is the nine-method run, quoted with the spread it was
+measured with. The six added since — exponential and Richardson ZNE,
+vnCDR, tensored and iterative readout mitigation, Pauli twirling — are in
+the shootout output rather than here, because pasting numbers from a
+shorter run beside numbers from a longer one is the kind of quiet
+mismatch this package objects to.
 
 | method | invented noise | measured `fake_kyiv` |
 |---|---|---|
@@ -970,6 +977,61 @@ no prediction: the closest budget seen is only 0.05 similar to this one
 here is how a model earns trust it has not been given.
 ```
 
+### Fifteen methods, and one answer
+
+Bring a circuit and it meets everything available, not everything
+convenient. The catalogue is now fifteen: readout mitigation in three
+forms (full inversion, tensored, and a non-negative iterative solve),
+ZNE in three (linear folding, Richardson, exponential), CDR and vnCDR,
+PEC, symmetry verification, Pauli twirling, the compositions — and the
+two deliberate frauds that keep the detectors honest.
+
+Two of the new ones earn their place by what they refuse or fail to do.
+
+**ZNE (exponential)** fits `a + B·Rˣ` rather than a polynomial, and on
+the measured device it **refuses**: *"fitted decay ratio 1.157 is not a
+decay; the noise is not behaving the way this model assumes."* Three
+points that are not a decay are not an exponential sampled with noise,
+and extrapolating anyway is invention.
+
+**Pauli twirling** makes the answer slightly *worse* — 37.06 against
+35.33 unmitigated. Correct: that noise model is already depolarizing, so
+there is no coherent error to convert and the extra gates only cost. A
+method that does nothing when its assumption is unmet, visibly, is more
+useful than one that always appears to help.
+
+Each CX is wrapped in a random Pauli and its compensating partner. A test
+asserts the twirled circuit equals the original **up to global phase** —
+the property that matters — rather than the Pauli identity in the table,
+which is off by a sign on two entries in a way no expectation value can
+see.
+
+**One answer, with disagreement inside the bar.** `engine.consensus`
+runs everything, excludes what failed its attack, and reports the median
+of the survivors with *two* uncertainty terms:
+
+```
+answer: 1.2675 +- 0.3783
+  shot noise      0.05
+  method spread   0.375
+  agreed by 4 methods: REM + ZNE, CDR, ZNE (exponential), REM (iterative)
+  excluded: oracle peek (fraud)
+  -> the bar is dominated by DISAGREEMENT between methods, not by shot
+     noise. More shots will not narrow it.
+```
+
+That second term is the one a single-method pipeline cannot compute at
+all. Two methods agreeing within their shot noise is evidence; two
+disagreeing by ten times it means the answer depends on which assumption
+you made, and no number of shots fixes that.
+
+**A method that can refuse changed the plumbing.** Before this, every
+all-methods loop assumed a number always came back. The first refusing
+extrapolator broke two tests at once. `methods.attempt` is now the
+blessed way to run a method that might decline, `data_sensitivity`
+returns `None` rather than a score for a method that never ran, and a
+refusal is reported as absent rather than as a failure.
+
 ### Every audit makes the next one better
 
 The catalogue is frozen: it knows what happened on two noise models and
@@ -1077,11 +1139,14 @@ including `XYZ`, three measurement settings worked out automatically:
 | unmitigated | 0.0678 | 1.00x | 1.000 |
 | dressed identity | 0.0678 | 1.00x | 1.000 |
 
-Eight of nine methods run, with CDR's training circuits **generated**
-rather than demanded. The ninth — symmetry post-selection — refuses,
-because whether a state obeys a checkable symmetry is something a person
-asserts and no error budget reveals. Refusing is the correct answer, not
-a gap.
+Most of the catalogue runs, with CDR's training circuits **generated**
+rather than demanded. Symmetry post-selection refuses, because whether a
+state obeys a checkable symmetry is something a person asserts and no
+error budget reveals; an extrapolator refuses when the folded values are
+not the shape its model assumes. Refusing is the correct answer, not a
+gap — and every all-methods loop here is written to report a refusal
+rather than to break on one, which is a lesson that arrived through a
+red CI run.
 
 **And this found a real flaw in the fraud detector.** Scrambling a
 method's data scrambled its *calibration* too, so a calibrated method
@@ -1130,23 +1195,34 @@ times.
 
 | method | TFIM (4 spins, 4 steps) | sensitivity |
 |---|---|---|
-| oracle peek (fraud) | *0.0082* | **0.020** |
-| REM + ZNE | **0.1581** | 0.539 |
-| CDR | 0.1801 | 1.090 |
-| REM | 0.2272 | 0.536 |
-| ZNE | 0.3463 | 1.142 |
-| PEC | 0.3491 | 1.041 |
-| unmitigated | 0.4095 | 1.000 |
-| dressed identity | 0.4095 | 1.000 |
+| oracle peek (fraud) | *0.0064* | **0.020** |
+| vnCDR | **0.0155** | 1.052 |
+| CDR | 0.0205 | 1.467 |
+| REM + ZNE | 0.0447 | 1.208 |
+| REM (readout) | 0.1329 | 1.115 |
+| REM (iterative) | 0.1329 | 1.115 |
+| REM (tensored) | 0.1399 | 1.114 |
+| ZNE (Richardson) | 0.2109 | 1.255 |
+| ZNE (fold 1,3,5) | 0.2406 | 1.065 |
+| PEC | 0.2565 | 1.041 |
+| unmitigated | 0.3206 | 1.000 |
+| dressed identity | 0.3206 | 1.000 |
+| Pauli twirling | 0.3585 | 0.754 |
+| symmetry verification | *refused* — no symmetry declared | — |
+| ZNE (exponential) | *refused* — decay ratio 1.059 is not a decay | — |
 
 **What held on both:** the fraud tops the accuracy table and is caught
-anyway; the dressed identity returns *exactly* the unmitigated value;
-REM+ZNE is the best honest method; PEC underperforms wherever its assumed
-model isn't the real one; symmetry verification correctly refuses where
-no symmetry exists.
+anyway; the dressed identity returns *exactly* the unmitigated value; PEC
+underperforms wherever its assumed model isn't the real one; symmetry
+verification correctly refuses where no symmetry exists.
 
-**What didn't:** readout dominance, and the size of the gains — 2.6x here
-against 23x on H2.
+**What didn't:** readout dominance; the size of the gains — 20.7x here
+against 23x on H2; and *which method gets there*. This table said "REM+ZNE
+is the best honest method" until the catalogue grew and vnCDR took the
+place — while the number beside the name was being read from the run and
+the name was being remembered from an older one. The example now prints
+both from the same run, because a sentence half measured and half
+remembered is worse than one that is wholly either.
 
 The second system also found two bugs. REM's confusion matrix was
 hardcoded 4×4 — fine on the only system it had ever run on, and a crash

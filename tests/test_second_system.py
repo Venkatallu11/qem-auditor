@@ -20,7 +20,7 @@ if HAVE_AER:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
     from benchmarks import tfim
-    from benchmarks.methods import (METHODS, Sampler, ScrambledSampler,
+    from benchmarks.methods import (METHODS, REFUSALS, Sampler, ScrambledSampler,
                                     h2_system, unmitigated)
     from real_device_audit import calibration, device_noise
 
@@ -108,7 +108,7 @@ class GeneralisationTest(unittest.TestCase):
                     [cls.system.error(method(Sampler(cls.backend, SHOTS, s,
                                                      cls.system)))
                      for s in SEEDS])
-            except ValueError:
+            except REFUSALS:
                 cls.errors[name] = None
 
     def test_readout_no_longer_dominates_on_a_deeper_circuit(self):
@@ -165,7 +165,7 @@ class GeneralisationTest(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_AER, "needs qiskit-aer")
 class RefactorTest(unittest.TestCase):
-    """Generalising the nine methods must not have moved H2's numbers.
+    """Generalising the catalogue must not have moved H2's numbers.
 
     Each was measured before the System abstraction existed, and each is
     a claim quoted in the README.

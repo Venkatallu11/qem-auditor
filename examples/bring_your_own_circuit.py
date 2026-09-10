@@ -32,7 +32,7 @@ except ImportError:
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0] + "/..")
 
-from benchmarks.methods import (METHODS, Sampler,  # noqa: E402
+from benchmarks.methods import (METHODS, REFUSALS, Sampler,  # noqa: E402
                                 TargetScrambledSampler,
                                 system_from_circuit, unmitigated)
 from qem_auditor.estimation import group_terms  # noqa: E402
@@ -143,13 +143,15 @@ def main() -> int:
                 [system.error(method(Sampler(backend, SHOTS, s, system)))
                  for s in SEEDS])
             rows.append((name, error, shift(method) / reference if reference else 0))
-        except ValueError as refusal:
+        except REFUSALS as refusal:
             rows.append((name, None, str(refusal)))
 
     raw = next(e for n, e, _ in rows if n == "unmitigated")
     print(f"\n  {'method':28s} {'error':>9s} {'gain':>7s} {'sensitivity':>12s}")
     print("  " + "-" * 62)
-    for name, error, extra in sorted(rows, key=lambda r: (r[1] is None, r[1])):
+    # Two refusals in one table would compare None with None here.
+    for name, error, extra in sorted(
+            rows, key=lambda r: (r[1] is None, r[1] if r[1] is not None else 0.0)):
         if error is None:
             print(f"  {name:28s}   refused -- {extra[:34]}")
             continue
@@ -164,9 +166,13 @@ def main() -> int:
     print("  The fraud is still closest and still caught. The dressed identity")
     print("  still returns exactly the unmitigated value. Nothing here was")
     print("  special-cased for this circuit.")
-    print("\n  One method refused rather than guessed: symmetry post-selection")
-    print("  needs a symmetry someone asserts, and no error budget reveals one.")
-    print("  Refusing is the correct answer, not a gap.")
+    declined = [n for n, e, _ in rows if e is None]
+    if declined:
+        print(f"\n  {len(declined)} method(s) refused rather than guessed: "
+              f"{', '.join(declined)}.")
+        print("  Symmetry post-selection needs a symmetry someone asserts, and")
+        print("  an extrapolator refuses when its model does not describe the")
+        print("  data. Refusing is the correct answer, not a gap.")
     print("=" * 72)
     return 0
 

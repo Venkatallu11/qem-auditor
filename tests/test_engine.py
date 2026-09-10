@@ -7,7 +7,7 @@ remove.
 """
 import unittest
 
-from qem_auditor.engine import MethodOutcome, recommend
+from qem_auditor.engine import MethodOutcome, consensus, recommend
 from qem_auditor.prescribe import feasibility
 
 EAGLE = {"ecr_error": 0.00311, "readout_error": 0.0293}
@@ -97,3 +97,64 @@ class FeasibilityRefusalTest(unittest.TestCase):
     def test_no_outcomes_at_all_is_refused(self):
         with self.assertRaises(ValueError):
             recommend([])
+
+
+class ConsensusTest(unittest.TestCase):
+    """"Run everything and give me the answer" -- and the honest form of
+    that is not one method's number."""
+
+    def surviving(self):
+        return [
+            outcome("REM + ZNE", [1.15, 1.30, 0.95, 1.20], sensitivity=0.62),
+            outcome("CDR", [1.29, 1.35, 1.20, 1.31], sensitivity=1.08),
+            outcome("ZNE (exponential)", [1.90, 2.05, 1.80, 1.95], sensitivity=0.88),
+            outcome("REM (iterative)", [1.22, 1.28, 1.18, 1.25], sensitivity=1.10),
+        ]
+
+    def test_a_fraud_is_excluded_from_the_average(self):
+        """Including a fraud's number in a median lets it move the answer
+        it was caught not reading."""
+        result = consensus(self.surviving()
+                           + [outcome("fraud", [0.1] * 4, sensitivity=0.02)])
+        self.assertNotIn("fraud", result.methods)
+        self.assertIn("fraud", result.excluded)
+        self.assertGreater(result.estimate, 1.0)
+
+    def test_the_bar_carries_both_terms(self):
+        result = consensus(self.surviving(), statistical=0.05)
+        self.assertAlmostEqual(result.statistical, 0.05)
+        self.assertGreater(result.systematic, 0.0)
+        self.assertAlmostEqual(
+            result.uncertainty,
+            (result.statistical ** 2 + result.systematic ** 2) ** 0.5)
+
+    def test_disagreement_between_methods_is_reported_as_such(self):
+        """The thing a single-method pipeline cannot compute: when the bar
+        is dominated by disagreement, more shots will not narrow it."""
+        result = consensus(self.surviving(), statistical=0.05)
+        self.assertTrue(result.dominated_by_disagreement)
+        report = result.format_report()
+        self.assertIn("DISAGREEMENT", report)
+        self.assertIn("More shots will not narrow it", report)
+
+    def test_close_agreement_is_reported_as_statistical(self):
+        agreeing = [outcome(f"m{i}", [1.20 + 0.001 * i] * 4, sensitivity=1.0)
+                    for i in range(4)]
+        result = consensus(agreeing, statistical=0.5)
+        self.assertFalse(result.dominated_by_disagreement)
+        self.assertIn("more shots would narrow it", result.format_report())
+
+    def test_one_surviving_method_is_not_agreement(self):
+        result = consensus([outcome("only", [1.2, 1.3, 1.1, 1.25],
+                                    sensitivity=1.0)])
+        self.assertEqual(result.systematic, 0.0)
+        self.assertIn("not the same as agreement", result.reason)
+
+    def test_no_survivor_means_no_answer(self):
+        result = consensus([outcome("fraud", [0.1] * 4, sensitivity=0.02)])
+        self.assertFalse(result.is_an_answer)
+        self.assertIn("no relationship to the experiment", result.reason)
+
+    def test_an_empty_set_is_refused(self):
+        with self.assertRaises(ValueError):
+            consensus([])

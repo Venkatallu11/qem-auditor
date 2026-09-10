@@ -38,8 +38,8 @@ from real_device_audit import (ECR_DURATION, SX_DURATION,  # noqa: E402
                                calibration, device_noise)
 
 from benchmarks import tfim  # noqa: E402
-from benchmarks.methods import (METHODS, Sampler, ScrambledSampler,  # noqa: E402
-                                h2_system, unmitigated)
+from benchmarks.methods import (METHODS, REFUSALS, Sampler,  # noqa: E402
+                                ScrambledSampler, h2_system, unmitigated)
 from qem_auditor.prescribe import budget_from_calibration, prescribe  # noqa: E402
 
 SHOTS = 20_000
@@ -131,38 +131,53 @@ def main() -> int:
 
     rows = []
     for name, method in METHODS.items():
+        # Refusals are reported, not skipped, and the reason is the
+        # method's own: symmetry verification needs a symmetry nobody
+        # declared here, while an extrapolator refuses when its model
+        # does not describe the folded values. Printing one reason for
+        # both would be inventing the second.
         try:
             rows.append((name, median_error(method, system, full),
-                         sensitivity(method, system, full, reference_shift)))
-        except ValueError:
-            rows.append((name, None, None))
+                         sensitivity(method, system, full, reference_shift),
+                         None))
+        except REFUSALS as refusal:
+            rows.append((name, None, None, str(refusal)))
 
-    raw = next(e for n, e, _ in rows if n == "unmitigated")
+    raw = next(e for n, e, _, _ in rows if n == "unmitigated")
     print(f"\n  {'method':28s} {'error':>9s} {'gain':>7s} {'sensitivity':>12s}")
     print("  " + "-" * 62)
-    for name, error, sens in sorted(rows, key=lambda r: (r[1] is None, r[1])):
+    # Sorting on the error alone compares None with None as soon as two
+    # methods refuse, which is a TypeError rather than a table.
+    for name, error, sens, refusal in sorted(
+            rows, key=lambda r: (r[1] is None, r[1] if r[1] is not None else 0.0)):
         if error is None:
-            print(f"  {name:28s}       n/a -- declares no symmetry here")
+            print(f"  {name:28s}   refused -- {refusal[:38]}")
             continue
         flag = "" if sens >= SENSITIVITY_FLOOR else "  <-- not reading the data"
         print(f"  {name:28s} {error:9.4f} {raw / error:6.2f}x {sens:12.3f}{flag}")
 
-    honest = [(n, e) for n, e, s in rows
+    honest = [(n, e) for n, e, s, _ in rows
               if e is not None and s is not None and s >= SENSITIVITY_FLOOR]
     best = min(honest, key=lambda r: r[1])
-    cheat = [(n, e) for n, e, s in rows
+    cheat = [(n, e) for n, e, s, _ in rows
              if e is not None and s is not None and s < SENSITIVITY_FLOOR]
 
     print("\n  What held on both systems:")
     print(f"    the fraud tops the accuracy table and is caught anyway "
           f"({cheat[0][1]:.4f}, sensitivity 0.02)")
     print("    the dressed identity returns exactly the unmitigated value")
-    print(f"    REM + ZNE is the best honest method ({best[1]:.4f} here, "
-          "1.56 kcal/mol on H2)")
+    # The NAME comes from the run too. This line read "REM + ZNE is the
+    # best honest method" beside a number pulled from the data, and when
+    # the catalogue grew the number became vnCDR's while the name stayed
+    # REM + ZNE -- a sentence half measured and half remembered, which
+    # is worse than one that is wholly either.
+    print(f"    the best honest method here is {best[0]} at {best[1]:.4f}, "
+          f"{raw / best[1]:.1f}x better than raw")
     print("    PEC underperforms wherever its assumed model is not the real one")
     print("\n  What did not:")
     print("    readout dominance, which was a fact about a two-gate circuit")
-    print("    the size of the gains -- 2.6x here against 23x on H2")
+    print(f"    the size of the gains -- {raw / best[1]:.1f}x here against 23x "
+          "on H2, and which method gets there is not stable either")
 
     if cheat and best[1] <= cheat[0][1]:
         print("\n  FAILED: the fraud did not top the accuracy table, so this "
