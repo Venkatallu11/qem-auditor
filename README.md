@@ -837,6 +837,91 @@ Validated against 2,500 resampled experiments: predicted amplification
 And it names what's missing rather than only what failed — *"submit
 counts at fold 3 and 5 and we can run ZNE"*, not *"ZNE unavailable"*.
 
+### A real trapped-ion job, and three things nobody checks
+
+The sister project reached real hardware: IonQ `qpu.forte-enterprise-1`,
+August 2026, a 5-qubit circuit at 100 shots. That one job — and the bill
+that came with it — paid for three additions here, each of which would
+have caught something before it cost anything.
+
+```bash
+python examples/hardware_postmortem.py     # no qiskit needed
+```
+
+**1. Are the counts what they claim to be?** (`qem_auditor.counts`)
+
+A vendor SDK returned a "histogram" endpoint's raw counts, the client
+assumed probabilities and multiplied by the shot count, and every table
+came back inflated by exactly that factor. It was caught by one line of
+arithmetic — *does this sum to the shots we asked for* — and that line
+is now a gate that runs before `analyse` computes anything.
+
+What makes it worth a module is the asymmetry of the damage:
+
+| | correct | inflated ×100 |
+|---|---|---|
+| estimate | −0.040000 | −0.040000 |
+| σ | 0.099920 | 0.009992 |
+
+An expectation value is a **weighted** mean, so scaling every count
+leaves it untouched. The shot-noise bar falls as 1/√N, so it comes out
+**√k times too tight** — at the real k of 2000, a bar 45× too small
+under an estimate that looks perfect. Nothing about the numbers looks
+wrong. The claim just quietly becomes 45 times stronger than the data
+supports, which is why `analyse` now **refuses** rather than noting it.
+
+**2. What does the vendor say was done to your data?** (`qem_auditor.vendor`)
+
+There is a third party to every hardware run whose statement nobody
+reads: the provider's own job record. IonQ's carries an
+`error_mitigation` block naming whether debiasing and symmetry
+verification were applied. A submitter can believe in good faith they
+collected an unmitigated baseline while the service quietly debiased it
+— and every gain measured against that baseline is then measured against
+something already mitigated. On this job both are `false`, which is the
+answer you want and *only* knowable from the record.
+
+The same record states gate counts **as executed**:
+
+```
+as written     20 1q + 11 2q   gate error 0.0470
+as executed   120 1q + 11 2q   gate error 0.0658   (1.40x)
+```
+
+Compilation to the native basis held the two-qubit count fixed and
+multiplied the one-qubit count by six. The sister project found this the
+expensive way — native conversion made raw error 3–4× *worse* — after
+years of optimising two-qubit counts alone.
+
+**3. What would doing it properly cost?** (`qem_auditor.cost`)
+
+Two real jobs, same circuit, 100 and 500 shots. The first billed
+**$25.79**. The second billed about the same — recorded to the dollar,
+not the cent, and the code carries that distinction rather than rounding
+it away: it bounds the per-shot term at $1/400 shots instead of claiming
+a hundred-times-tighter bound the evidence doesn't support.
+
+Cost is per-**circuit**, not per-shot, and that reorganises everything:
+
+| method | circuits | $ at any shot count |
+|---|---|---|
+| symmetry verification | 1 | $25.79 |
+| REM | 3 | $77.37 |
+| ZNE | 3 | $77.37 |
+| CDR | 6 | $154.74 |
+| Pauli twirling | 16 | $412.64 |
+| PEC | 500 | $12,895.00 |
+
+**CDR is the most accurate honest method in this package's own
+benchmarks and costs 91% of a $170 budget. PEC sits in the same
+prescription and costs 76× it.** Post-selection needs no extra circuits
+at all — it spends shots instead, keeping ~90% of them (measured:
+91.5%, 90.2%, 90.1% on three real trapped-ion circuits).
+
+Every table above is priced from one account, one backend, one month,
+and says so. What is *general* is the circuit multiplicity of each
+method; what is not is the price, and the two are kept apart.
+
 ### Six machines, and what honestly changes between them
 
 This project spent its whole life calibrated against one IBM Eagle chip.
@@ -1711,6 +1796,16 @@ repo reuses its real, disclosed results as the first benchmark suite for
 auditing claims. The figures in `benchmarks/` are transcribed from that
 ledger with iteration and task cited, not linked — an upstream correction
 would need a manual re-sync.
+
+That project has since reached **real hardware** — IonQ
+`qpu.forte-enterprise-1`, August 2026 — and the run is the source of
+`counts.py`, `vendor.py` and `cost.py` here. `tests/fixtures/ionq_forte_job.json`
+is one of those real job records with the account identifiers redacted
+and every physical field left alone. Three things came back from it that
+no simulator could have taught this package: that a shot count is worth
+checking against the counts that claim it, that the provider keeps its
+own account of what was done to your data, and that the binding
+constraint on a real device is usually circuits rather than accuracy.
 
 ## License
 

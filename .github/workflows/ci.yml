@@ -37,6 +37,7 @@ jobs:
           test -f /tmp/corpus/corpus.json
       # V4: the predictor, and the leave-one-out check that refuses it.
       - run: python examples/knowledge_model.py
+      - run: python examples/hardware_postmortem.py
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json

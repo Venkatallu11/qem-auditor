@@ -20,6 +20,18 @@ EPSILON = [(0.06, 0.08), (0.05, 0.07)]
 OBSERVABLE = [("ZZ", 0.4), ("II", -1.05)]
 
 
+def as_counts(distribution, shots):
+    """A distribution as a real device would return it: whole shots.
+
+    A counts table built as probability x shots carries fractions, which
+    no device ever produces, and `analyse` now refuses them -- rightly,
+    since a shot-noise floor computed from fractional counts is a floor
+    for an experiment nobody ran. Rounding here keeps the fixtures
+    faithful to the thing they stand in for.
+    """
+    return {bits: round(p * shots) for bits, p in distribution.items()}
+
+
 def confuse(distribution, epsilon=EPSILON):
     """Apply a known readout model, so tests have a ground truth."""
     width = len(next(iter(distribution)))
@@ -218,7 +230,7 @@ class ReportTest(unittest.TestCase):
     def test_every_advertised_method_is_actually_run(self):
         """Listing a method as available and then not running it would be
         the same unbacked claim this package objects to elsewhere."""
-        report = analyse({"ZZ": {b: v * 4000 for b, v in confuse(TRUTH).items()}},
+        report = analyse({"ZZ": as_counts(confuse(TRUTH), 4000)},
                          OBSERVABLE, calibration=calibration_for())
         run = {estimate.method for estimate in report.estimates}
         self.assertIn("unmitigated", run)

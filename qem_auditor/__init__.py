@@ -33,6 +33,11 @@ from .devices import (PROFILES, Architecture, DeviceProfile, budget_for,
                       profile)
 from .results import (MitigatedEstimate, ResultsReport, ShotNoise, analyse,
                       shot_noise)
+from .counts import CountsError, CountsProblem, CountsReport, check_counts
+from .cost import (PRICING, Affordability, MethodCost, Pricing, Quote,
+                   affordable_methods, circuits_for)
+from .vendor import (Contradiction, JobRecord, VendorRecordError, cross_check,
+                     ionq_job)
 from .control import (ControlError, DistributionShift, IsolatedEffect,
                       build_control, distribution_shift, isolate_effect)
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout

@@ -197,7 +197,11 @@ def _cmd_analyze(args) -> int:
                         for term in bundle["observable"]],
             calibration=bundle.get("calibration"),
             folds=bundle.get("folds"),
-            claimed_uncertainty=bundle.get("claimed_uncertainty"))
+            claimed_uncertainty=bundle.get("claimed_uncertainty"),
+            # Optional, and the only check that catches a counts table
+            # which is internally perfect and wrong by a constant
+            # factor. Absent, the structural checks still run.
+            declared_shots=bundle.get("shots"))
     except Exception as failure:
         print(f"error: {failure}", file=sys.stderr)
         return EXIT_BAD_RECORD
@@ -225,6 +229,10 @@ def _cmd_analyze(args) -> int:
 
 ANALYZE_TEMPLATE = {
     "observable": [["ZZ", 0.4], ["XX", -0.2], ["II", -1.05]],
+    # What was REQUESTED, per setting. Checked against what the counts
+    # actually sum to, because those two came apart on real hardware and
+    # the only visible symptom was an error bar that was too good.
+    "shots": 8000,
     "measurements": {
         "ZZ": {"00": 7000, "11": 500, "01": 300, "10": 200},
         "XX": {"00": 4200, "11": 3600, "01": 100, "10": 100},
