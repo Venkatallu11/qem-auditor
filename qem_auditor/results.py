@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .counts import check_counts
 from .estimation import EstimationError, term_bases
 
 
@@ -282,8 +283,33 @@ class ResultsReport:
 def analyse(measurements: dict, observable, calibration: Optional[dict] = None,
             folds: Optional[dict] = None,
             claimed_uncertainty: Optional[float] = None,
-            confidence: float = 0.95) -> ResultsReport:
-    """Read someone's hardware results and say what they support."""
+            confidence: float = 0.95,
+            declared_shots: Optional[int] = None) -> ResultsReport:
+    """Read someone's hardware results and say what they support.
+
+    The counts are checked before anything is computed from them, and a
+    defect REFUSES rather than being noted: every number below is a
+    function of this data, so analysing data known to be corrupt would
+    produce a confident interval around a quantity nobody measured.
+
+    Pass `declared_shots` whenever the requested shot count is known. It
+    is the only check that catches a table which is internally perfect
+    and wrong by a constant factor -- the failure that scales an
+    expectation value not at all and its error bar by sqrt of the
+    factor. See counts.py for the real instance that motivated it.
+    """
+    check_counts(measurements, declared_shots=declared_shots).raise_if_broken()
+    if folds:
+        # Structural checks only. A fold set is legitimately run at a
+        # different shot count from the unfolded submission -- folds cost
+        # more circuit time, and budgets get spent unevenly -- so
+        # declaring a mismatch here would refuse honest data.
+        # Each entry is a whole measurements mapping at that scale, not
+        # a single counts table -- the same shape `shot_noise` is handed
+        # below, and checking the other shape would silently check
+        # nothing.
+        for scale, at_scale in folds.items():
+            check_counts(at_scale).raise_if_broken()
     noise = shot_noise(measurements, observable)
     availability = available_methods(measurements, calibration, folds)
     notes = []
