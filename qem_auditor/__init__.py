@@ -34,7 +34,7 @@ from .devices import (PROFILES, Architecture, DeviceProfile, budget_for,
 from .results import (MitigatedEstimate, ResultsReport, ShotNoise, analyse,
                       shot_noise)
 from .counts import CountsError, CountsProblem, CountsReport, check_counts
-from .cost import (PRICING, Affordability, MethodCost, Pricing, Quote,
+from .cost import (RATE_CARDS, Affordability, MethodCost, Quote, RateCard,
                    affordable_methods, circuits_for)
 from .vendor import (Contradiction, JobRecord, VendorRecordError, cross_check,
                      ionq_job)

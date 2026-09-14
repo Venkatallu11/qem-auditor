@@ -2,98 +2,117 @@
 
 Every other module here prices a method in error: how much of the budget
 it reaches, what it assumes, whether it survived its attacks. None of
-them priced it in money or in circuits, and on real hardware that turns
-out to be the binding constraint far more often than accuracy is.
+them priced it in money, and on real hardware that is the binding
+constraint far more often than accuracy is.
 
-The numbers below come from real submissions to `qpu.forte-enterprise-1`
-in August 2026. Two jobs ran the SAME circuit at 100 and at 500 shots.
-The 100-shot job billed $25.79. The 500-shot job billed about the same
--- recorded as roughly $25, with the cents never written down.
+The rate card below is IonQ's own, from their `GET /jobs/estimate`
+endpoint:
 
-That last clause is load-bearing and is carried through the code rather
-than rounded away. "The same to the cent" would license a per-shot bound
-a hundred times tighter than the evidence supports, which is the exact
-move this package exists to catch, so the bound below is computed from
-the resolution actually recorded ($1, not $0.01).
+    job_cost_minimum   $25.7899   charged once per JOB
+    cost_1q_gate       $0.000164  per gate, per shot
+    cost_2q_gate       $0.001121  per gate, per shot
 
-That single fact reorganises the whole problem. Cost on that machine is
-per-CIRCUIT, not per-shot, so:
+    cost = max(job minimum, (n1q*r1 + n2q*r2) * shots * circuits)
 
-  - shots are nearly free once a circuit is paid for, and a budget is
-    better spent on fewer circuits with more shots each
-  - methods that need many DISTINCT circuits are expensive in a way no
-    error budget shows. Post-selection needs no extra circuits at all.
-    PEC needs hundreds. They can sit one line apart in a prescription
-    ranked on error and differ by three orders of magnitude in price
-  - a full 21-slot x 13-group reconstruction is 273 circuits, which at
-    the measured rate is about $6,800 whatever the shot count
+Three real quotes from that endpoint reproduce exactly under this
+formula, including a 125-circuit job that came back at precisely 125.0x
+the one-circuit price -- which is what establishes that the minimum is
+per JOB and not per circuit.
 
-The methods' circuit multiplicities are structural -- they follow from
-what each method has to run, not from any device -- so they are worth
-stating once and reusing. What is NOT general is the price: it is one
-account, one backend, one month, and it is labelled that way.
+TWO REGIMES, AND THE ONE THAT MISLEADS
+--------------------------------------
+Below the minimum, shots are genuinely free: two real submissions of the
+same 5-qubit circuit at 100 and at 500 shots both billed $25.79, and it
+is tempting to conclude cost is per-circuit and shots do not matter.
+That conclusion is wrong, and this module used to make it. Both jobs
+simply sat under the floor. For that circuit the floor stops binding at
+806 shots, and at 2,000 shots the same job costs $64.02.
+
+So "shots are free" is a statement about a REGIME, not about a machine,
+and the regime has an exact boundary this module computes rather than
+assumes. Quoting the flat price outside it understates a real bill by
+whatever factor the shot count exceeds the break-even.
+
+WHY GATE COUNTS ARE A PRICE AND NOT ONLY AN ERROR BUDGET
+--------------------------------------------------------
+Cost is charged per gate per shot, so the circuit that compilation
+actually produces is the one that gets billed. The real job here was
+written with 20 one-qubit gates and executed 120 of them after native
+compilation: the same change that made the error budget worse also
+multiplied the price per shot by 2.05x, and moved the break-even from
+1,652 shots down to 806.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass(frozen=True)
-class Pricing:
-    """How a device charges, and where that was learned.
+class RateCard:
+    """A provider's real pricing, and where it came from."""
 
-    `per_shot_usd` is an upper BOUND, not a measurement, wherever two
-    jobs at different shot counts billed the same: all such a pair can
-    say is that the per-shot term is smaller than the resolution of the
-    bill. Recording it as exactly zero would be claiming a measurement
-    nobody made.
-    """
-
-    per_circuit_usd: float
-    per_shot_usd_bound: float
+    job_minimum_usd: float
+    one_qubit_usd: float
+    two_qubit_usd: float
     as_of: str
     source: str
-    #: The per-shot price where it is actually KNOWN. None means nobody
-    #: measured it and `per_shot_usd_bound` is all there is. Keeping
-    #: these apart matters: collapsing them into one number either
-    #: prices a per-shot machine at zero or inflates a per-circuit one
-    #: by a bound nobody was billed.
-    per_shot_usd: Optional[float] = None
 
-    def quote(self, circuits: int, shots: int) -> float:
-        """What it should cost, using only terms that were measured."""
-        return (circuits * self.per_circuit_usd
-                + circuits * shots * (self.per_shot_usd or 0.0))
+    def per_shot(self, one_qubit_gates: int, two_qubit_gates: int) -> float:
+        """What one shot of one circuit costs, before the floor."""
+        return (one_qubit_gates * self.one_qubit_usd
+                + two_qubit_gates * self.two_qubit_usd)
 
-    def upper(self, circuits: int, shots: int) -> float:
-        """The most it could cost if an unmeasured term sits at its bound.
+    def gate_cost(self, circuits: int, one_qubit_gates: int,
+                  two_qubit_gates: int, shots: int) -> float:
+        return circuits * shots * self.per_shot(one_qubit_gates, two_qubit_gates)
 
-        Kept separate from `quote` on purpose. Folding an upper bound
-        into a point estimate reports a number larger than anything
-        anyone was billed, and then everything downstream quietly
-        inherits it.
+    def quote(self, circuits: int, one_qubit_gates: int, two_qubit_gates: int,
+              shots: int, one_job: bool = True) -> float:
+        """Price a set of circuits.
+
+        `one_job` is not a detail. The minimum is charged per JOB, so
+        submitting N circuits separately pays it N times while batching
+        them pays it once -- worth real money below the break-even and
+        worth nothing above it, where the floor never binds anyway.
         """
-        if self.per_shot_usd is not None:
-            return self.quote(circuits, shots)
-        return (circuits * self.per_circuit_usd
-                + circuits * shots * self.per_shot_usd_bound)
+        gates = self.gate_cost(circuits, one_qubit_gates, two_qubit_gates, shots)
+        if one_job:
+            return max(self.job_minimum_usd, gates)
+        return circuits * max(self.job_minimum_usd,
+                              self.gate_cost(1, one_qubit_gates,
+                                             two_qubit_gates, shots))
+
+    def break_even_shots(self, one_qubit_gates: int, two_qubit_gates: int,
+                         circuits: int = 1) -> Optional[int]:
+        """The shot count where the job minimum stops covering the bill.
+
+        Below it, more shots are free. Above it, cost is linear in shots
+        and the flat price people remember from small jobs is an
+        understatement. None when the circuit has no billable gates.
+        """
+        per_shot = self.per_shot(one_qubit_gates, two_qubit_gates) * circuits
+        if per_shot <= 0:
+            return None
+        return math.ceil(self.job_minimum_usd / per_shot)
 
 
-#: Measured, not published. One account, one backend, one month -- which
-#: is exactly as far as it should be trusted. The bound on the per-shot
-#: term is (resolution of what was RECORDED) / (difference in shots) =
-#: $1.00 / 400, not $0.01 / 400: the second bill was written down as
-#: roughly $25 without its cents.
-PRICING = {
-    "ionq_forte_enterprise": Pricing(
-        per_circuit_usd=25.79, per_shot_usd_bound=2.5e-3,
-        as_of="2026-08-25",
-        source="two real jobs on qpu.forte-enterprise-1 from one account: "
-               "100 shots billed $25.79, and 500 shots of the same circuit "
-               "billed about the same, recorded to the dollar rather than "
-               "the cent -- so the per-shot term is bounded by $1 over a "
-               "400-shot difference, not measured"),
+#: Real, from the provider's own estimate endpoint rather than a price
+#: page -- and one account, one backend, one month, which is exactly as
+#: far as it should be trusted.
+RATE_CARDS = {
+    "ionq_forte": RateCard(
+        job_minimum_usd=25.7899,
+        one_qubit_usd=0.000164,
+        two_qubit_usd=0.001121,
+        as_of="2026-08",
+        source="IonQ GET /jobs/estimate for qpu.forte-1. Three quotes "
+               "reproduce exactly under this formula, including a "
+               "125-circuit job at precisely 125.0x the one-circuit "
+               "price, which is what shows the minimum is per job. Two "
+               "real submissions at 100 and 500 shots both billed "
+               "$25.79, both under the floor"),
 }
 
 
@@ -116,21 +135,35 @@ class MethodCost:
         """
         return int(shots * self.retained)
 
-    def quote(self, pricing: Pricing, shots: int) -> "Quote":
-        return Quote(self, pricing.quote(self.circuits, shots),
-                     pricing.upper(self.circuits, shots), shots,
-                     self.effective_shots(shots))
+    def quote(self, rates: RateCard, shots: int, one_qubit_gates: int,
+              two_qubit_gates: int, one_job: bool = True) -> "Quote":
+        return Quote(
+            cost=self,
+            usd=rates.quote(self.circuits, one_qubit_gates, two_qubit_gates,
+                            shots, one_job),
+            usd_separate_jobs=rates.quote(self.circuits, one_qubit_gates,
+                                          two_qubit_gates, shots, False),
+            break_even=rates.break_even_shots(one_qubit_gates,
+                                              two_qubit_gates, self.circuits),
+            shots_paid=shots,
+            shots_kept=self.effective_shots(shots))
 
 
 @dataclass(frozen=True)
 class Quote:
-    """A price, with what it buys."""
+    """A price, with what it buys and which regime it is in."""
 
     cost: MethodCost
     usd: float
-    usd_upper: float
+    usd_separate_jobs: float
+    break_even: Optional[int]
     shots_paid: int
     shots_kept: int
+
+    @property
+    def floor_binds(self) -> bool:
+        """Are we in the regime where more shots are free?"""
+        return self.break_even is not None and self.shots_paid < self.break_even
 
     @property
     def discarded(self) -> int:
@@ -139,35 +172,29 @@ class Quote:
     def describe(self) -> str:
         line = (f"  {self.cost.method:38s} {self.cost.circuits:5d} circuits  "
                 f"${self.usd:12,.2f}")
-        if self.usd_upper > self.usd * 1.05:
-            line += f" (up to ${self.usd_upper:,.2f})"
+        line += "  at the job floor" if self.floor_binds else "  gate-metered"
         if self.discarded:
-            line += f"   keeps {self.shots_kept:,}/{self.shots_paid:,} shots"
+            line += f", keeps {self.shots_kept:,}/{self.shots_paid:,} shots"
         return line
 
 
-#: How many distinct circuits each method submits, for ONE estimate.
-#: These are structural: they follow from what the method has to run.
-#: Where a method's count depends on a parameter it is a function of it
-#: rather than a number, because pretending PEC has a fixed cost is how
-#: a prescription recommends something nobody can afford.
 def circuits_for(method: str, *, qubits: int = 4, training: int = 5,
                  folds: int = 3, twirls: int = 16,
                  pec_samples: int = 500) -> MethodCost:
     """The circuit count and shot retention of one method by name.
 
-    Names match `prescribe.CATALOGUE` where they overlap, and the
-    shootout's implementation names otherwise, so a prescription can be
-    priced without a translation table.
+    These are structural: they follow from what the method has to run,
+    independently of any device. Names match `prescribe.CATALOGUE` where
+    they overlap so a prescription can be priced without a translation
+    table.
     """
     table = {
         "unmitigated": MethodCost(
             "unmitigated", 1, 1.0, "the circuit itself"),
         "more shots": MethodCost(
             "more shots", 1, 1.0,
-            "the same circuit; on a per-circuit-priced device this is the "
-            "cheapest improvement there is, which is the opposite of the "
-            "advice that holds on a per-shot-priced one"),
+            "the same circuit -- free while the job minimum covers the "
+            "bill, and linear in shots the moment it stops"),
         "readout error mitigation (REM)": MethodCost(
             "readout error mitigation (REM)", 1 + 2, 1.0,
             "the circuit, plus all-zeros and all-ones calibration"),
@@ -181,7 +208,9 @@ def circuits_for(method: str, *, qubits: int = 4, training: int = 5,
             "which is why the tensored form exists"),
         "zero-noise extrapolation (ZNE)": MethodCost(
             "zero-noise extrapolation (ZNE)", folds, 1.0,
-            f"one circuit per noise scale ({folds})"),
+            f"one circuit per noise scale ({folds}) -- and folding MULTIPLIES "
+            "the gate count, so on a gate-metered bill the folded copies "
+            "cost more than the original rather than the same"),
         "REM then ZNE": MethodCost(
             "REM then ZNE", folds + 2, 1.0,
             "the folds, plus readout calibration shared across them"),
@@ -224,7 +253,9 @@ class Affordability:
     quotes: tuple
     budget_usd: float
     shots: int
-    pricing: Pricing
+    rates: RateCard
+    one_qubit_gates: int
+    two_qubit_gates: int
 
     @property
     def affordable(self) -> tuple:
@@ -235,12 +266,25 @@ class Affordability:
         return tuple(q for q in self.quotes if q.usd > self.budget_usd)
 
     def describe(self) -> str:
-        lines = [f"  budget ${self.budget_usd:,.2f} at {self.shots:,} shots "
-                 f"per circuit, priced at ${self.pricing.per_circuit_usd}/circuit "
-                 f"(a bracketed figure is the most it could cost if the "
-                 f"unmeasured per-shot term sits at its bound)",
-                 f"  ({self.pricing.as_of}: {self.pricing.source})",
-                 ""]
+        single = self.rates.break_even_shots(self.one_qubit_gates,
+                                             self.two_qubit_gates)
+        lines = [
+            f"  budget ${self.budget_usd:,.2f}, {self.shots:,} shots, a circuit "
+            f"of {self.one_qubit_gates} one-qubit and {self.two_qubit_gates} "
+            f"two-qubit gates",
+            f"  ({self.rates.as_of}: {self.rates.source})",
+            "",
+            f"  one circuit costs ${self.rates.per_shot(self.one_qubit_gates, self.two_qubit_gates):.6f}/shot, "
+            f"so the ${self.rates.job_minimum_usd:.2f} job minimum covers it "
+            f"up to {single:,} shots.",
+        ]
+        lines.append(
+            f"  At {self.shots:,} shots you are "
+            + ("UNDER that line, where more shots are genuinely free."
+               if self.shots < single else
+               f"OVER it by {self.shots / single:.1f}x, where every shot is "
+               "billed and 'shots are free' stops being true."))
+        lines.append("")
         for quote in sorted(self.quotes, key=lambda q: q.usd):
             mark = "    " if quote.usd <= self.budget_usd else "  X "
             lines.append(mark + quote.describe().lstrip())
@@ -248,30 +292,36 @@ class Affordability:
             lines.append("")
             lines.append(f"  {len(self.refused)} of {len(self.quotes)} methods "
                          "cost more than the budget. That is a fact about the "
-                         "device's pricing, not about how good they are.")
-        cheapest = min(self.quotes, key=lambda q: q.usd)
-        headroom = self.budget_usd / max(cheapest.usd, 1e-9)
-        lines.append("")
-        lines.append(
-            f"  Cost here is per-CIRCUIT. The budget buys "
-            f"{int(self.budget_usd // self.pricing.per_circuit_usd)} circuits "
-            f"at any shot count, so raising shots on {cheapest.cost.method} "
-            f"is close to free while adding circuits is not "
-            f"({headroom:.1f}x headroom on the cheapest method).")
+                         "pricing, not about how good they are.")
+        batched = [q for q in self.quotes if q.usd_separate_jobs > q.usd * 1.01]
+        if batched:
+            lines.append("")
+            lines.append(
+                f"  The minimum is charged per JOB, so batching circuits into "
+                f"one submission matters below the break-even: "
+                f"{batched[0].cost.method} costs "
+                f"${batched[0].usd:,.2f} batched against "
+                f"${batched[0].usd_separate_jobs:,.2f} as separate jobs.")
         return "\n".join(lines)
 
 
 def affordable_methods(methods, budget_usd: float, shots: int,
-                       pricing: Optional[Pricing] = None,
-                       **kwargs) -> Affordability:
+                       one_qubit_gates: int, two_qubit_gates: int,
+                       rates: Optional[RateCard] = None,
+                       one_job: bool = True, **kwargs) -> Affordability:
     """Price a list of method names against a real budget.
 
-    This is the check nobody runs before submitting, and the one whose
-    absence costs real money: a prescription ranked purely on which
-    error term it reaches will happily recommend a method that needs
-    500 circuits on a machine that charges $25.79 for each one.
+    The gate counts are required rather than defaulted, because cost is
+    charged per gate per shot: a method priced without them is priced
+    for a circuit nobody ran. Use the counts the provider reports as
+    EXECUTED, not the ones the circuit was written with -- on the real
+    job behind this module those differed by 6x on one-qubit gates and
+    doubled the price per shot.
     """
-    pricing = pricing or PRICING["ionq_forte_enterprise"]
-    quotes = tuple(circuits_for(name, **kwargs).quote(pricing, shots)
-                   for name in methods)
-    return Affordability(quotes, budget_usd, shots, pricing)
+    rates = rates or RATE_CARDS["ionq_forte"]
+    quotes = tuple(
+        circuits_for(name, **kwargs).quote(rates, shots, one_qubit_gates,
+                                           two_qubit_gates, one_job)
+        for name in methods)
+    return Affordability(quotes, budget_usd, shots, rates,
+                         one_qubit_gates, two_qubit_gates)
