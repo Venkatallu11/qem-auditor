@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qem_auditor.cost import PRICING, affordable_methods  # noqa: E402
+from qem_auditor.cost import RATE_CARDS, affordable_methods  # noqa: E402
 from qem_auditor.counts import check_counts  # noqa: E402
 from qem_auditor.prescribe import (ErrorSource,  # noqa: E402
                                    budget_from_calibration)
@@ -124,21 +124,36 @@ def main() -> int:
     print("  section 3 shows costs almost nothing on this machine.")
 
     rule("3. WHAT WOULD DOING THIS PROPERLY COST?")
-    pricing = PRICING["ionq_forte_enterprise"]
+    rates = RATE_CARDS["ionq_forte"]
     methods = ["unmitigated", "more shots",
                "symmetry verification (post-selection)",
                "readout error mitigation (REM)",
                "zero-noise extrapolation (ZNE)", "REM then ZNE",
                "Clifford data regression (CDR)", "vnCDR", "Pauli twirling",
                "probabilistic error cancellation (PEC)"]
-    print(affordable_methods(methods, budget_usd=170.0, shots=2000,
-                             pricing=pricing).describe())
 
-    print("\n  Note which method the shootout crowns and which this table")
-    print("  can afford. CDR is the most accurate honest method in this")
-    print("  package's own benchmarks and costs 91% of the budget; PEC is")
-    print("  in the same prescription and costs 76x it. An auditor that")
-    print("  ranks methods on error alone will recommend one nobody can run.")
+    # This job's own shot count, where the minimum covers everything,
+    # and a realistic one, where it does not. Showing only the first is
+    # how "shots are free on this machine" became a belief here -- two
+    # real bills at 100 and 500 shots, both at the floor, read as a
+    # property of the device rather than of the regime.
+    for shots in (job.shots, 2000):
+        print()
+        print(affordable_methods(methods, budget_usd=170.0, shots=shots,
+                                 one_qubit_gates=job.one_qubit_gates,
+                                 two_qubit_gates=job.two_qubit_gates,
+                                 rates=rates).describe())
+
+    written = rates.per_shot(AS_WRITTEN_ONE_QUBIT, AS_WRITTEN_TWO_QUBIT)
+    executed = rates.per_shot(job.one_qubit_gates, job.two_qubit_gates)
+    print()
+    print("  And section 2's finding is a PRICE, not only an error budget.")
+    print("  Cost is charged per gate per shot, so the compilation that took")
+    print(f"  20 one-qubit gates to 120 multiplied the bill per shot by "
+          f"{executed / written:.2f}x")
+    print(f"  (${written:.6f} -> ${executed:.6f}) and moved the break-even from")
+    print(f"  {rates.break_even_shots(AS_WRITTEN_ONE_QUBIT, AS_WRITTEN_TWO_QUBIT):,}"
+          f" shots down to {rates.break_even_shots(job.one_qubit_gates, job.two_qubit_gates):,}.")
     print("=" * 74)
     return 0
 

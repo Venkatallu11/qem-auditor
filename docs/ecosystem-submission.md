@@ -1,5 +1,46 @@
 # Qiskit Ecosystem submission
 
+## Outcome: accepted, 2026-09-18
+
+qem-auditor is a Qiskit Ecosystem member. The entry is
+`resources/members/qemauditor_66544776.toml` upstream, carrying
+`submission_number = 1355`, and it landed in `main` on 2026-09-18.
+
+The mechanism this document predicted held exactly: the submission issue
+came first (#1355), `qiskit-bot` wrote the member file and opened the
+pull request from it, and a maintainer merged. Nothing here was written
+by hand upstream, which is what generated the `uuid` and the badge.
+
+Two fields came back different from what was proposed below, and the
+accepted values are the ones that count:
+
+| field | proposed here | accepted entry |
+|---|---|---|
+| category | Tooling | **Noise Management** |
+| labels | error mitigation, research, quantum information, chemistry, AI/LLM | error mitigation, AI/LLM, benchmarking, **quantum information**, research |
+
+`chemistry` was dropped and `benchmarking` added, which is the better
+description: the benchmark suite is the part a stranger meets first, and
+the chemistry is a test system rather than a subject. `maturity` and
+`status` came back as `experimental` / `Very Early Project`, which is
+what was asked for and what the project can support.
+
+**The badge**, generated from the first segment of the entry's uuid:
+
+```markdown
+[![Qiskit Ecosystem](https://img.shields.io/endpoint?url=https://qiskit.github.io/ecosystem/b/66544776)](https://qisk.it/e)
+```
+
+That form -- `[![Qiskit Ecosystem](<url>)](https://qisk.it/e)` -- is the
+one their own `badge_md` generator emits, not a guess. Once their daily
+workflow adds a `[badge]` block to the member file, a `qisk.it/e-66544776`
+short link resolves to the same image; the long form above does not wait
+on it. The badge also carries membership STATUS: if the project stops
+meeting the criteria it changes to "under revision", and to "alumni" if
+it is removed. It is a live signal, not a trophy.
+
+---
+
 You are already an Ecosystem member: `quantum-chemistry-vqe` is
 `resources/members/quantumche_e52f2069.toml` upstream, carrying
 `submission_number = 1224`. This documents how that happened, so

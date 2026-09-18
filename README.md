@@ -1,5 +1,9 @@
 # qem-auditor
 
+[![Qiskit Ecosystem](https://img.shields.io/endpoint?url=https://qiskit.github.io/ecosystem/b/66544776)](https://qisk.it/e)
+[![tests](https://github.com/Venkatallu11/qem-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/Venkatallu11/qem-auditor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Can I trust this quantum error-mitigation result?**
 
 An auditor for quantum error-mitigation claims. It does not try to produce
@@ -895,32 +899,47 @@ years of optimising two-qubit counts alone.
 
 **3. What would doing it properly cost?** (`qem_auditor.cost`)
 
-Two real jobs, same circuit, 100 and 500 shots. The first billed
-**$25.79**. The second billed about the same — recorded to the dollar,
-not the cent, and the code carries that distinction rather than rounding
-it away: it bounds the per-shot term at $1/400 shots instead of claiming
-a hundred-times-tighter bound the evidence doesn't support.
+Two real jobs, same circuit, 100 and 500 shots. Both billed **$25.79**.
 
-Cost is per-**circuit**, not per-shot, and that reorganises everything:
+The tempting reading — *cost is per circuit, shots are free* — is wrong,
+and this module made that mistake before the rate card corrected it. Both
+jobs simply sat under a floor. IonQ's own `GET /jobs/estimate` gives the
+model:
 
-| method | circuits | $ at any shot count |
+```
+cost = max($25.7899 per JOB,  (n1q x $0.000164 + n2q x $0.001121) x shots x circuits)
+```
+
+Three quotes from that endpoint reproduce exactly under it — including a
+125-circuit job priced at *precisely* 125.0× the one-circuit price, which
+is what proves the minimum is charged per job and not per circuit.
+
+So there are **two regimes**, with an exact boundary:
+
+| shots | this circuit (120 1q + 11 2q) | |
 |---|---|---|
-| symmetry verification | 1 | $25.79 |
-| REM | 3 | $77.37 |
-| ZNE | 3 | $77.37 |
-| CDR | 6 | $154.74 |
-| Pauli twirling | 16 | $412.64 |
-| PEC | 500 | $12,895.00 |
+| 100 | $25.79 | at the floor — more shots free |
+| 500 | $25.79 | at the floor |
+| **806** | **$25.80** | **the floor stops binding** |
+| 2,000 | $64.02 | gate-metered, linear in shots |
+| 10,000 | $320.11 | |
 
-**CDR is the most accurate honest method in this package's own
-benchmarks and costs 91% of a $170 budget. PEC sits in the same
-prescription and costs 76× it.** Post-selection needs no extra circuits
-at all — it spends shots instead, keeping ~90% of them (measured:
-91.5%, 90.2%, 90.1% on three real trapped-ion circuits).
+Which method you can afford depends on which regime you're in. At 100
+shots, nine of ten methods sit at the same $25.79. At 2,000 shots, seven
+of ten blow a $170 budget and only post-selection and the bare circuit
+survive.
 
-Every table above is priced from one account, one backend, one month,
-and says so. What is *general* is the circuit multiplicity of each
-method; what is not is the price, and the two are kept apart.
+And because the bill is per **gate** per shot, finding 2 is a price as
+well as an error budget: compilation taking 20 one-qubit gates to 120
+multiplied the cost per shot by **2.05×** and moved the break-even from
+1,653 shots down to 806. The native-gate conversion that made the error
+worse also doubled the bill.
+
+One more consequence worth knowing before you submit: the minimum is per
+job, so below the break-even, batching circuits into a single submission
+is real money — REM's three circuits cost $25.79 batched against $77.37
+sent separately. Above it, batching saves nothing.
+
 
 ### Six machines, and what honestly changes between them
 
