@@ -1,5 +1,9 @@
 # qem-auditor
 
+[![Qiskit Ecosystem](https://img.shields.io/endpoint?url=https://qiskit.github.io/ecosystem/b/66544776)](https://qisk.it/e)
+[![tests](https://github.com/Venkatallu11/qem-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/Venkatallu11/qem-auditor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Can I trust this quantum error-mitigation result?**
 
 An auditor for quantum error-mitigation claims. It does not try to produce
