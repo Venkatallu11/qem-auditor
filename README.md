@@ -796,6 +796,9 @@ nothing to point at them.
 ```bash
 qem-auditor analyze --template > results.json   # the shape
 qem-auditor analyze results.json
+
+# Or, if what you have is the provider's job record rather than counts:
+qem-auditor postmortem ionq_job.json --claims-unmitigated --budget 170
 ```
 
 No qiskit needed: counts are dictionaries, so a hardware post-mortem
@@ -940,6 +943,125 @@ job, so below the break-even, batching circuits into a single submission
 is real money — REM's three circuits cost $25.79 batched against $77.37
 sent separately. Above it, batching saves nothing.
 
+
+### What to run, and whether you can afford to
+
+Two halves of this package spent a while answering different questions
+past each other. `prescribe` ranks methods by how much of your error
+budget they reach. `cost` prices them. Nothing joined the two, so a
+prescription could confidently recommend a method costing fifteen times
+the budget — right about the physics, useless about the experiment.
+
+```python
+from qem_auditor.cost import price_consult
+
+print(price_consult(consult, budget_usd=170, shots=2000,
+                    one_qubit_gates=120, two_qubit_gates=11).describe())
+```
+
+On the real circuit from that IonQ run, at 2,000 shots against the $170
+that was actually authorised:
+
+```
+  X zero-noise extrapolation (ZNE)    3 circuits  $  192.07  gate-metered
+  X REM then ZNE                      5 circuits  $  320.11  gate-metered
+  X Clifford data regression (CDR)    6 circuits  $  384.13  gate-metered
+
+  Nothing prescribed fits $170.00 at 2,000 shots. Fewer shots may bring
+  the job minimum back into play -- see the break-even above.
+```
+
+Nothing fits. That is the honest answer, and it comes with the lever
+that changes it: at 500 shots the same budget buys the top prescription
+outright, because the job minimum starts covering the bill again.
+
+**Price never reorders the prescription.** It removes what cannot be run
+and says which survivor ranked highest — and when the top choice is
+priced out, the wording says *demotion by price, not by evidence*. A
+table sorted by money quietly answers "what is cheapest", which is not
+the question anyone asked. A test pins that wording, and another pins
+that every method the catalogue can prescribe is one `cost` can price,
+so the two cannot drift apart unnoticed.
+
+### The mitigation IBM applies before you ask for any
+
+IonQ's record says what *was* done. IBM's Estimator poses a sharper
+problem: it mitigates **by default**, resolved server-side from a single
+`resilience_level` that most people never set.
+
+From `qiskit-ibm-runtime`'s own option docstrings:
+
+| option | level 0 | **level 1 — the default** | level 2 |
+|---|---|---|---|
+| `measure_mitigation` | False | **True** | True |
+| twirling `enable_measure` | False | **True** | True |
+| twirling `enable_gates` | False | False | True |
+| `zne_mitigation` | False | False | True |
+| `pec_mitigation` | False | False | False |
+
+So a bare `Estimator(mode=backend)` applies **readout error mitigation
+and measurement twirling**. A result collected that way is not an
+unmitigated baseline, however firmly the person holding it believes it
+is — and nothing in their own code says otherwise, because they never
+wrote the line that turned mitigation on.
+
+```python
+from qem_auditor.vendor import ibm_estimator_mitigation, cross_check_ibm
+
+applied = ibm_estimator_mitigation()          # nothing configured
+print(applied.describe())
+#   resilience_level 1 (the default -- nobody set it)
+#   the service applies: readout error mitigation, measurement twirling
+#   never requested, resolved from the level: readout error mitigation, ...
+```
+
+These rules are **transcribed, not observed** — unlike the IonQ reader,
+which is built against a real job. A transcription has a shelf life and
+the failure mode is silent: IBM changes a default, this keeps answering
+confidently about a version nobody runs. So six tests read the installed
+library's docstrings and fail if the defaults move. The source is the
+fixture.
+
+### One command for a job you already ran
+
+The three hardware modules used to be reachable only from Python, which
+is backwards: the person holding a job record and a bill is the least
+likely to write a script to read them.
+
+```bash
+qem-auditor postmortem ionq_job.json --claims-unmitigated \
+    --one-qubit-gates 20 --two-qubit-gates 11 --budget 170 --shots 2000
+```
+
+```
+  what the VENDOR records:
+  job 01a03ad5-… on qpu.forte-enterprise-1, 100 shots
+  as EXECUTED: 120 one-qubit, 11 two-qubit, 11:1 (ZZ basis)
+  vendor-applied mitigation: none declared in the job record
+
+  the raw counts:
+  counts look sound: 1 setting(s), 100 shots, 5-bit outcomes
+
+  one-qubit gates: record says 20, vendor job says 120 after compilation
+      -> an error budget built on the gates as written describes a
+         circuit the machine never ran
+
+  what the next run costs:
+  one circuit costs $0.032011/shot, so the $25.79 job minimum covers it
+  up to 806 shots. At 2,000 shots you are OVER it by 2.5x.
+```
+
+It reads an IonQ job record or an IBM options mapping, decided by the
+shape the file actually has, and refuses by name when it is neither —
+guessing which vendor wrote an unrecognised file is how a reader invents
+fields that were never there. Exit code 1 when something contradicts, so
+it drops into a pipeline.
+
+Writing it surfaced one more bug of exactly the kind this section is
+about: the cost table priced the circuit **as written** when the vendor's
+record said 120 gates had executed. Cost is charged per executed gate per
+shot, so it was quoting for a circuit the machine never ran. A test now
+pins the executed counts as the ones that win.
 
 ### Six machines, and what honestly changes between them
 
@@ -1825,6 +1947,19 @@ no simulator could have taught this package: that a shot count is worth
 checking against the counts that claim it, that the provider keeps its
 own account of what was done to your data, and that the binding
 constraint on a real device is usually circuits rather than accuracy.
+
+## Contributing
+
+`CONTRIBUTING.md` states the one rule — a claim has to carry its
+evidence — and lists three times this project broke it and got caught.
+Bug reports that say only "this number looks wrong to me" are welcome;
+one of them rewrote the pricing model.
+
+## Citing
+
+`CITATION.cff`, which GitHub renders into a "Cite this repository"
+button. If this changed a claim you were about to make, that is worth a
+sentence in your text rather than only a line in your bibliography.
 
 ## License
 

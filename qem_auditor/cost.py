@@ -325,3 +325,96 @@ def affordable_methods(methods, budget_usd: float, shots: int,
         for name in methods)
     return Affordability(quotes, budget_usd, shots, rates,
                          one_qubit_gates, two_qubit_gates)
+
+
+@dataclass(frozen=True)
+class PricedAdvice:
+    """A prescription, priced. What to run, and whether you can run it."""
+
+    affordability: Affordability
+    #: Prescribed method names, in the order the prescription ranked them.
+    ranked: tuple
+
+    def quote_for(self, method: str) -> Optional[Quote]:
+        for quote in self.affordability.quotes:
+            if quote.cost.method == method:
+                return quote
+        return None
+
+    @property
+    def best_affordable(self) -> Optional[Quote]:
+        """The highest-ranked method that fits, which is not the cheapest.
+
+        Cheapest would be a different question. The prescription ranked
+        these by how much of the error they reach, and that ordering is
+        the part worth preserving once price has removed some of them.
+        """
+        for name in self.ranked:
+            quote = self.quote_for(name)
+            if quote and quote.usd <= self.affordability.budget_usd:
+                return quote
+        return None
+
+    @property
+    def priced_out(self) -> tuple:
+        budget = self.affordability.budget_usd
+        return tuple(name for name in self.ranked
+                     if (q := self.quote_for(name)) and q.usd > budget)
+
+    def describe(self) -> str:
+        lines = [self.affordability.describe(), ""]
+        top = self.ranked[0] if self.ranked else None
+        best = self.best_affordable
+        if top and best and best.cost.method == top:
+            lines.append(f"  The top prescription, {top}, fits: "
+                         f"${best.usd:,.2f} of ${self.affordability.budget_usd:,.2f}.")
+        elif top and best:
+            lines.append(
+                f"  The top prescription is {top}, and it does not fit. The "
+                f"best one that does is {best.cost.method} at "
+                f"${best.usd:,.2f}.")
+            lines.append("  That is a demotion by PRICE, not by evidence: the "
+                         "ordering above is still what reaches most of the "
+                         "error, and nothing here says the cheaper method is "
+                         "better at the job.")
+        elif top:
+            lines.append(f"  Nothing prescribed fits ${self.affordability.budget_usd:,.2f} "
+                         f"at {self.affordability.shots:,} shots. Fewer shots "
+                         "may bring the job minimum back into play -- see the "
+                         "break-even above.")
+        if self.priced_out:
+            lines.append(f"  Priced out: {', '.join(self.priced_out)}.")
+        return "\n".join(lines)
+
+
+def price_consult(consult, *, budget_usd: float, shots: int,
+                  one_qubit_gates: int, two_qubit_gates: int,
+                  rates: Optional[RateCard] = None,
+                  include_marginal: bool = False, **kwargs) -> PricedAdvice:
+    """Price what `prescribe` recommended, in the order it recommended it.
+
+    The two halves of this package have been answering different
+    questions past each other: `prescribe` ranks methods by how much of
+    the error budget they reach, and this module prices them, and
+    nothing joined the two. So a prescription could confidently
+    recommend a method that costs fifteen times the budget, and be right
+    about the physics and useless about the experiment.
+
+    Price never reorders the prescription. It removes what cannot be
+    run and says which of the survivors ranked highest, because
+    "cheapest" is a different question from "best", and a table sorted
+    by money quietly answers the wrong one.
+    """
+    actions = [p.action for p in consult.prescriptions]
+    if include_marginal:
+        actions += [p.action for p in consult.marginal]
+    seen, ranked = set(), []
+    for action in actions:
+        if action not in seen:
+            seen.add(action)
+            ranked.append(action)
+    affordability = affordable_methods(
+        ranked, budget_usd=budget_usd, shots=shots,
+        one_qubit_gates=one_qubit_gates, two_qubit_gates=two_qubit_gates,
+        rates=rates, **kwargs)
+    return PricedAdvice(affordability, tuple(ranked))

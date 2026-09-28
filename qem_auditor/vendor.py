@@ -247,3 +247,189 @@ def cross_check(job: JobRecord, *,
                 "circuit the machine never ran; compilation to a native "
                 "basis is where the two diverge"))
     return tuple(found)
+
+
+# --- IBM: the mitigation you get without asking -----------------------
+#
+# IonQ's record says what WAS done, after the fact. IBM's Estimator
+# poses a different and sharper problem: it applies error mitigation BY
+# DEFAULT, before anyone asks for any, and the defaults are resolved
+# server-side from a single `resilience_level` number that most users
+# never set.
+#
+# The rules below are transcribed from the installed
+# qiskit-ibm-runtime's own option docstrings, quoted in the tests so a
+# version bump that changes them fails loudly rather than leaving this
+# module quietly describing last year's behaviour. They are NOT
+# observed from a real IBM job -- unlike the IonQ reader, which is
+# built against one -- and that difference is the reason the defaults
+# are pinned by a test that reads the library rather than by a fixture.
+
+#: EstimatorOptions.resilience_level, when the user sets nothing.
+#: "Default: 1" -- and level 1 is "Mitigate error associated with
+#: readout errors", which is mitigation nobody in that path asked for.
+IBM_DEFAULT_RESILIENCE_LEVEL = 1
+
+#: The level at or above which each option turns itself on, when the
+#: user leaves it Unset. From the docstrings: measure_mitigation and
+#: measurement twirling are False only at level 0; gate twirling and ZNE
+#: are False at levels 0 and 1 and True at level 2; PEC defaults to
+#: False at every level and has to be asked for.
+_RESOLVES_AT = {
+    "readout_mitigation": 1,
+    "measurement_twirling": 1,
+    "gate_twirling": 2,
+    "zne": 2,
+}
+
+
+@dataclass(frozen=True)
+class AppliedMitigation:
+    """What an IBM Estimator will apply, including what you did not ask for."""
+
+    resilience_level: int
+    readout_mitigation: bool
+    measurement_twirling: bool
+    gate_twirling: bool
+    zne: bool
+    pec: bool
+    #: Which of the above the submitter set explicitly. Everything else
+    #: was resolved from the resilience level by the service.
+    explicit: tuple
+    #: True when the level itself was left to the default.
+    level_defaulted: bool
+
+    @property
+    def applied(self) -> tuple:
+        return tuple(name for name, on in (
+            ("readout error mitigation", self.readout_mitigation),
+            ("measurement twirling", self.measurement_twirling),
+            ("gate twirling", self.gate_twirling),
+            ("ZNE", self.zne),
+            ("PEC", self.pec)) if on)
+
+    @property
+    def unrequested(self) -> tuple:
+        """Applied, but never asked for -- the part that surprises people."""
+        asked = {
+            "readout error mitigation": "readout_mitigation",
+            "measurement twirling": "measurement_twirling",
+            "gate twirling": "gate_twirling",
+            "ZNE": "zne",
+            "PEC": "pec",
+        }
+        return tuple(name for name in self.applied
+                     if asked[name] not in self.explicit)
+
+    def describe(self) -> str:
+        level = (f"resilience_level {self.resilience_level}"
+                 + (" (the default -- nobody set it)" if self.level_defaulted
+                    else " (set explicitly)"))
+        lines = [f"  {level}"]
+        if not self.applied:
+            lines.append("  nothing is mitigated: this really is a raw run")
+            return "\n".join(lines)
+        lines.append("  the service applies: " + ", ".join(self.applied))
+        if self.unrequested:
+            lines.append("  never requested, resolved from the level: "
+                         + ", ".join(self.unrequested))
+        return "\n".join(lines)
+
+
+def _flag(options: dict, *path):
+    """Read a possibly-nested option, treating absence as Unset.
+
+    Options arrive as plain dicts from a saved payload and as nested
+    option objects from a live Estimator, so both shapes are read the
+    same way rather than one being blessed.
+    """
+    node = options
+    for key in path:
+        if hasattr(node, key):
+            node = getattr(node, key)
+        elif isinstance(node, dict) and key in node:
+            node = node[key]
+        else:
+            return None
+        if node is None:
+            return None
+    if isinstance(node, bool):
+        return node
+    # qiskit-ibm-runtime's sentinel for "let the server decide".
+    if type(node).__name__ == "UnsetType":
+        return None
+    return node if isinstance(node, (int, float, str)) else None
+
+
+def ibm_estimator_mitigation(options=None) -> AppliedMitigation:
+    """What an IBM Estimator run applies, given the options it was handed.
+
+    Pass `estimator.options`, or the options mapping from a saved job
+    payload, or nothing at all to see what a bare
+    `Estimator(mode=backend)` does.
+
+    The answer to that last case is the point of this function: readout
+    error mitigation AND measurement twirling, both on, because
+    `resilience_level` defaults to 1 and both resolve to True there. A
+    result collected that way is not an unmitigated baseline, however
+    firmly the person who collected it believes it is -- and nothing in
+    their own code says otherwise, because they never wrote the line
+    that turned mitigation on.
+    """
+    options = options if options is not None else {}
+    level = _flag(options, "resilience_level")
+    level_defaulted = level is None
+    if level_defaulted:
+        level = IBM_DEFAULT_RESILIENCE_LEVEL
+    level = int(level)
+
+    explicit = []
+    resolved = {}
+    for name, path in (
+            ("readout_mitigation", ("resilience", "measure_mitigation")),
+            ("zne", ("resilience", "zne_mitigation")),
+            ("pec", ("resilience", "pec_mitigation")),
+            ("measurement_twirling", ("twirling", "enable_measure")),
+            ("gate_twirling", ("twirling", "enable_gates"))):
+        setting = _flag(options, *path)
+        if isinstance(setting, bool):
+            explicit.append(name)
+            resolved[name] = setting
+            continue
+        # PEC is the one that never turns itself on: "Default: False",
+        # with no level that flips it.
+        resolved[name] = (False if name == "pec"
+                          else level >= _RESOLVES_AT[name])
+
+    return AppliedMitigation(
+        resilience_level=level, explicit=tuple(explicit),
+        level_defaulted=level_defaulted, **resolved)
+
+
+def cross_check_ibm(mitigation: AppliedMitigation, *,
+                    claims_unmitigated: Optional[bool] = None) -> tuple:
+    """Compare an IBM run's claims against what the service will apply.
+
+    Separate from `cross_check` because the evidence is different in
+    kind: IonQ's record reports what happened, while this reasons from
+    the submitted options and the service's documented resolution of
+    them. Same conclusion, weaker evidence, and the two should not be
+    presented as though they were the same thing.
+    """
+    if not claims_unmitigated or not mitigation.applied:
+        return ()
+    detail = ", ".join(mitigation.applied)
+    reading = (
+        "every gain measured against this baseline is measured against "
+        "data that was already mitigated, so the improvement attributed "
+        "to the method is not the method's alone")
+    if mitigation.unrequested:
+        reading += (
+            f". Note that {', '.join(mitigation.unrequested)} was never "
+            "requested: it follows from resilience_level"
+            + (" being left at its default of "
+               f"{IBM_DEFAULT_RESILIENCE_LEVEL}" if mitigation.level_defaulted
+               else f" being {mitigation.resilience_level}")
+            + ", so nothing in the submitting code says it is on")
+    return (Contradiction("mitigation", "this is an unmitigated baseline",
+                          f"the service applies {detail}", reading),)

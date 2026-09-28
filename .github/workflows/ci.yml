@@ -38,6 +38,16 @@ jobs:
       # V4: the predictor, and the leave-one-out check that refuses it.
       - run: python examples/knowledge_model.py
       - run: python examples/hardware_postmortem.py
+      # The same three modules through the CLI door, on the real
+      # job record, including the IBM options path.
+      - run: |
+          qem-auditor postmortem --template > /tmp/pm.json
+          qem-auditor postmortem /tmp/pm.json --budget 170
+          qem-auditor postmortem tests/fixtures/ionq_forte_job.json \
+            --one-qubit-gates 20 --two-qubit-gates 11 --budget 170 \
+            --shots 2000 || test $? -eq 1
+          echo '{"resilience_level": 0}' > /tmp/ibm.json
+          qem-auditor postmortem /tmp/ibm.json --claims-unmitigated
       - run: python examples/memory_pays_off.py
       - run: python examples/attack_a_pipeline.py
       - run: qem-auditor template > /tmp/t.json && qem-auditor validate /tmp/t.json

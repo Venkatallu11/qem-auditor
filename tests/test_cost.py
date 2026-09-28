@@ -195,3 +195,74 @@ class AffordabilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PricedAdviceTest(unittest.TestCase):
+    """The join between the two halves of the package.
+
+    `prescribe` ranks methods by how much of the error they reach.
+    `cost` prices them. Until these were joined, a prescription could
+    confidently recommend a method costing fifteen times the budget and
+    be right about the physics while being useless about the experiment.
+    """
+
+    def setUp(self):
+        from qem_auditor.devices import PROFILES
+        from qem_auditor.prescribe import budget_from_calibration, prescribe
+
+        profile = PROFILES["ionq_forte"]
+        self.budget = budget_from_calibration(
+            one_qubit_gates=ONE_Q, two_qubit_gates=TWO_Q, measured_qubits=5,
+            shots=2000, one_qubit_error=profile.one_qubit_error,
+            two_qubit_error=profile.two_qubit_error,
+            readout_error=profile.readout_error)
+        self.consult = prescribe(self.budget, shots=2000)
+
+    def priced(self, shots, budget_usd=170.0):
+        from qem_auditor.cost import price_consult
+        return price_consult(self.consult, budget_usd=budget_usd, shots=shots,
+                             one_qubit_gates=ONE_Q, two_qubit_gates=TWO_Q)
+
+    def test_every_prescribable_method_can_be_priced(self):
+        """The catalogue and the price table drifting apart would mean a
+        prescription nobody can cost. Enforced rather than hoped for."""
+        from qem_auditor.prescribe import CATALOGUE
+
+        for method in CATALOGUE:
+            circuits_for(method.name)  # raises KeyError if unpriced
+
+    def test_price_does_not_reorder_the_prescription(self):
+        """Sorting by money answers a different question from the one
+        the prescription asked."""
+        advice = self.priced(2000)
+        self.assertEqual(advice.ranked,
+                         tuple(p.action for p in self.consult.prescriptions))
+
+    def test_at_two_thousand_shots_nothing_prescribed_fits(self):
+        advice = self.priced(2000)
+        self.assertIsNone(advice.best_affordable)
+        self.assertEqual(len(advice.priced_out), len(advice.ranked))
+        self.assertIn("Nothing prescribed fits", advice.describe())
+
+    def test_fewer_shots_brings_the_advice_back_into_range(self):
+        """And the message that says so has to be true: the same budget
+        at 500 shots buys the top prescription outright."""
+        advice = self.priced(500)
+        best = advice.best_affordable
+        self.assertIsNotNone(best)
+        self.assertEqual(best.cost.method, advice.ranked[0])
+        self.assertIn("fits", advice.describe())
+
+    def test_a_demotion_by_price_says_it_is_a_demotion_by_price(self):
+        """With a budget that buys the cheap end of the ranking but not
+        the top of it, the wording must not imply the survivor is better
+        at the job."""
+        advice = self.priced(2000, budget_usd=200.0)
+        best = advice.best_affordable
+        self.assertIsNotNone(best)
+        self.assertNotEqual(best.cost.method, advice.ranked[0])
+        text = advice.describe()
+        self.assertIn("demotion by PRICE, not by evidence", text)
+
+    def test_quote_for_an_unprescribed_method_is_absent_not_invented(self):
+        self.assertIsNone(self.priced(500).quote_for("Pauli twirling"))

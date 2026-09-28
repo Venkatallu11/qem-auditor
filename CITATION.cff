@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "QEM Auditor"
+message: >-
+  If you use this software in work you publish, please cite it.
+  If it changed a claim you were about to make, that is worth
+  saying in the text rather than only in the bibliography.
+type: software
+authors:
+  - given-names: Venkat
+    family-names: Allu
+    email: alluvenkat11@gmail.com
+repository-code: "https://github.com/Venkatallu11/qem-auditor"
+abstract: >-
+  An auditor for quantum error-mitigation claims. It does not
+  produce a better-corrected number; it designs experiments that
+  would destroy a claim, runs them, and reports what survived.
+  Fifteen mitigation methods, adversarial controls including a
+  deliberate fraud that wins every accuracy leaderboard and is
+  caught anyway, an eight-verdict lattice in which an unrun hard
+  gate is never a pass, and readers for real hardware job records.
+keywords:
+  - quantum computing
+  - quantum error mitigation
+  - reproducibility
+  - benchmarking
+  - Qiskit
+license: MIT
+version: 0.1.0
+date-released: "2026-08-27"

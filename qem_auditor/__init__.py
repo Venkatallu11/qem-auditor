@@ -34,10 +34,12 @@ from .devices import (PROFILES, Architecture, DeviceProfile, budget_for,
 from .results import (MitigatedEstimate, ResultsReport, ShotNoise, analyse,
                       shot_noise)
 from .counts import CountsError, CountsProblem, CountsReport, check_counts
-from .cost import (RATE_CARDS, Affordability, MethodCost, Quote, RateCard,
-                   affordable_methods, circuits_for)
-from .vendor import (Contradiction, JobRecord, VendorRecordError, cross_check,
-                     ionq_job)
+from .cost import (RATE_CARDS, Affordability, MethodCost, PricedAdvice,
+                   Quote, RateCard, affordable_methods, circuits_for,
+                   price_consult)
+from .vendor import (IBM_DEFAULT_RESILIENCE_LEVEL, AppliedMitigation,
+                     Contradiction, JobRecord, VendorRecordError, cross_check,
+                     cross_check_ibm, ibm_estimator_mitigation, ionq_job)
 from .control import (ControlError, DistributionShift, IsolatedEffect,
                       build_control, distribution_shift, isolate_effect)
 from .layout import DeviceLayout, LayoutAdvice, QubitProperties, advise_layout
