@@ -47,3 +47,8 @@ Homepage = "https://github.com/Venkatallu11/qem-auditor"
 
 [tool.setuptools]
 packages = ["qem_auditor", "qem_auditor.adapters"]
+
+# 98% of public functions carry return annotations, so shipping the
+# marker is a claim the code actually backs rather than an aspiration.
+[tool.setuptools.package-data]
+qem_auditor = ["py.typed"]

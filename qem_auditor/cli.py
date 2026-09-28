@@ -563,6 +563,132 @@ def _cmd_blind(args) -> int:
     return EXIT_OK if result.correct else EXIT_NOT_CERTIFIED
 
 
+POSTMORTEM_TEMPLATE = {
+    "_comment": "An IonQ job record as saved from the jobs API, or an IBM "
+                "Estimator options mapping. Both are read; neither is "
+                "guessed at.",
+    "job_id": "example",
+    "backend": "qpu.forte-enterprise-1",
+    "shots": 2000,
+    "counts": {"00000": 1100, "00001": 500, "00011": 400},
+    "raw_job_metadata": {
+        "id": "example",
+        "backend": "qpu.forte-enterprise-1",
+        "shots": 2000,
+        "stats": {"gate_counts": {"1q": 120, "2q": 11}},
+        "output": {
+            "compilation": {"gate_basis": "ZZ"},
+            "error_mitigation": {"debiasing": False,
+                                 "symmetry_verification": {"applied": False}},
+        },
+    },
+}
+
+
+def _cmd_postmortem(args) -> int:
+    """Read a real job the way someone holding one would."""
+    if getattr(args, "template", False):
+        print(json.dumps(POSTMORTEM_TEMPLATE, indent=2))
+        return EXIT_OK
+    if not args.path:
+        print("error: give a job record, or --template for its shape",
+              file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    from .cost import RATE_CARDS, affordable_methods
+    from .counts import check_counts
+    from .vendor import (cross_check, cross_check_ibm, ibm_estimator_mitigation,
+                         ionq_job)
+
+    try:
+        with open(args.path) as handle:
+            record = json.load(handle)
+    except Exception as failure:
+        print(f"error: could not read {args.path}: {failure}", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    # Which vendor's record is this? Decided by the shape it actually
+    # has rather than by a flag the caller has to remember, and refused
+    # by name when it is neither.
+    is_ionq = any(key in record for key in
+                  ("raw_job_metadata", "parent_raw_job_metadata", "counts_list")) \
+        or ("counts" in record and "backend" in record)
+    is_ibm = any(key in record for key in
+                 ("resilience_level", "resilience", "twirling"))
+    if not (is_ionq or is_ibm):
+        print(f"error: {args.path} is neither an IonQ job record (needs "
+              "`raw_job_metadata`, or `counts` and `backend`) nor an IBM "
+              "Estimator options mapping (needs `resilience_level`, "
+              "`resilience` or `twirling`). Run `qem-auditor postmortem "
+              "--template` for a shape that is read.", file=sys.stderr)
+        return EXIT_BAD_RECORD
+
+    problems = 0
+    print(f"POST-MORTEM  {args.path}")
+
+    if is_ibm:
+        mitigation = ibm_estimator_mitigation(record)
+        print("\n  what the SERVICE applies:")
+        print(mitigation.describe())
+        for found in cross_check_ibm(mitigation,
+                                     claims_unmitigated=args.claims_unmitigated):
+            problems += 1
+            print("\n  " + found.describe().strip())
+        return EXIT_NOT_CERTIFIED if problems else EXIT_OK
+
+    job = ionq_job(record)
+    print("\n  what the VENDOR records:")
+    print(job.describe())
+
+    if job.counts:
+        report = check_counts({"measured": job.counts},
+                              declared_shots=job.shots or None)
+        print("\n  the raw counts:")
+        print("  " + report.describe().replace("\n", "\n  "))
+        problems += len(report.problems)
+
+    for found in cross_check(
+            job, claims_unmitigated=args.claims_unmitigated,
+            declared_one_qubit_gates=args.one_qubit_gates,
+            declared_two_qubit_gates=args.two_qubit_gates):
+        problems += 1
+        print("\n  " + found.describe().strip())
+
+    # The vendor's EXECUTED counts win here, and the flags are only a
+    # fallback for a record that states none. The flags mean "as
+    # written", and cost is charged per executed gate per shot -- so
+    # preferring them would price the circuit the submitter drew rather
+    # than the one the machine ran and billed for. This had it the
+    # wrong way round and priced 20 one-qubit gates for a job whose own
+    # record says it executed 120.
+    one_q = job.one_qubit_gates or args.one_qubit_gates
+    two_q = job.two_qubit_gates or args.two_qubit_gates
+    if args.budget and one_q and two_q:
+        print("\n  what the next run costs:")
+        print(affordable_methods(
+            list(_POSTMORTEM_METHODS), budget_usd=args.budget,
+            shots=args.shots or job.shots or 1000,
+            one_qubit_gates=one_q, two_qubit_gates=two_q,
+            rates=RATE_CARDS["ionq_forte"]).describe())
+    elif args.budget:
+        print("\n  no gate counts to price with: the job record states none, "
+              "and none were passed with --one-qubit-gates/--two-qubit-gates")
+
+    return EXIT_NOT_CERTIFIED if problems else EXIT_OK
+
+
+#: Priced by default. Enough to show the shape of the trade without
+#: printing the whole catalogue at someone who asked about one job.
+_POSTMORTEM_METHODS = (
+    "unmitigated",
+    "symmetry verification (post-selection)",
+    "readout error mitigation (REM)",
+    "zero-noise extrapolation (ZNE)",
+    "Clifford data regression (CDR)",
+    "probabilistic error cancellation (PEC)",
+)
+
+
 def _cmd_template(args) -> int:
     print(record.dumps(_template()))
     return EXIT_OK
@@ -649,6 +775,28 @@ def build_parser() -> argparse.ArgumentParser:
                            help="print an example bundle to fill in")
     _add_store_arguments(p_analyze)
     p_analyze.set_defaults(func=_cmd_analyze_or_template)
+
+    p_post = sub.add_parser(
+        "postmortem",
+        help="read a real hardware job: its counts, what the vendor did to "
+             "them, and what the next run costs")
+    p_post.add_argument("path", nargs="?",
+                        help="an IonQ job record or IBM Estimator options; "
+                             "omit with --template")
+    p_post.add_argument("--template", action="store_true",
+                        help="print an example record to fill in")
+    p_post.add_argument("--claims-unmitigated", action="store_true",
+                        help="you believe this run is an unmitigated "
+                             "baseline; check that against the vendor")
+    p_post.add_argument("--one-qubit-gates", type=int, default=None,
+                        help="one-qubit gates as WRITTEN, to compare against "
+                             "what the vendor says executed")
+    p_post.add_argument("--two-qubit-gates", type=int, default=None)
+    p_post.add_argument("--budget", type=float, default=None,
+                        help="price the methods against this budget, in USD")
+    p_post.add_argument("--shots", type=int, default=None,
+                        help="shots to price for (default: the job's own)")
+    p_post.set_defaults(func=_cmd_postmortem)
 
     p_template = sub.add_parser("template", help="print a blank record to fill in")
     p_template.set_defaults(func=_cmd_template)
