@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -806,7 +807,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except BrokenPipeError:
+        # `qem-auditor postmortem job.json | head` closes the pipe while
+        # we are still writing, and the default behaviour is a traceback
+        # on a command that did nothing wrong. People pipe these outputs
+        # into head and less constantly; a stack trace there looks like a
+        # crash in the tool.
+        #
+        # stdout is redirected to devnull before returning so the
+        # interpreter's own flush at exit does not raise again and print
+        # "Exception ignored" over the top.
+        try:
+            sys.stdout.close()
+        finally:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
+        return EXIT_OK
 
 
 if __name__ == "__main__":
