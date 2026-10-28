@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the suite can be re-run without inventing a commit to carry it.
+  # A maintainer re-running CI should not have to push anything, and an
+  # empty commit pushed to kick a build is a lie in the history.
+  workflow_dispatch:
 
 jobs:
   core:
@@ -38,6 +42,9 @@ jobs:
       # V4: the predictor, and the leave-one-out check that refuses it.
       - run: python examples/knowledge_model.py
       - run: python examples/hardware_postmortem.py
+      # The first full real-hardware run, audited. Dependency-free:
+      # its inputs are a residual list, three energies, a bootstrap.
+      - run: python examples/audit_the_real_run.py
       # The same three modules through the CLI door, on the real
       # job record, including the IBM options path.
       - run: |

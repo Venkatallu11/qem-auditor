@@ -1,0 +1,90 @@
+# Publish to PyPI on a version tag.
+#
+# Uses PyPI Trusted Publishing (OIDC), so there is NO API token in this
+# repository and none in its secrets. GitHub proves to PyPI that this
+# workflow, in this repository, on this environment, is the one being
+# asked to publish. A leaked token cannot exist if no token exists.
+#
+# One-time setup on PyPI, which only a human with the account can do:
+#   https://pypi.org/manage/account/publishing/
+#   PyPI project name : qem-auditor
+#   Owner             : Venkatallu11
+#   Repository        : qem-auditor
+#   Workflow name     : publish.yml
+#   Environment name  : pypi
+#
+# Then publishing is:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in pyproject.toml. The job below checks
+# that rather than trusting it: a tag that disagrees with the metadata
+# publishes a version nobody named, and PyPI will not let you take it
+# back.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets a human dry-run the build and inspect the artifacts without
+  # publishing anything.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: The tag and the metadata must agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - <<'PY'
+          import os, sys, tomllib
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          if tag != version:
+              sys.exit(f"tag v{tag} does not match pyproject version {version}: "
+                       "publishing this would put a version on PyPI that "
+                       "nothing in the repository names, and PyPI does not "
+                       "allow a version to be replaced")
+          print(f"tag and metadata agree on {version}")
+          PY
+
+      # The suite is green on main before a tag exists, but a release is
+      # the one build where "it passed earlier" is not good enough.
+      - run: pip install -e ".[adapters,devices]" qiskit-aer
+      - run: python -m unittest discover -s tests -t .
+
+      - run: pip install build twine
+      - run: python -m build
+      - name: The artifacts must describe themselves correctly
+        run: twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    # Only ever on a tag. workflow_dispatch builds and stops.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qem-auditor
+    permissions:
+      # The OIDC token that stands in for an API token.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

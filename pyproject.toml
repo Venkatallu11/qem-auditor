@@ -1,5 +1,10 @@
 [build-system]
-requires = ["setuptools>=61"]
+# 77 is the floor for PEP 639 (`license` as an SPDX string plus
+# `license-files`). The older table form and the License classifier are
+# both deprecated and stop building on 2027-02-18, per setuptools' own
+# warning -- a dated expiry is worth fixing now rather than rediscovering
+# from a failed release.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +12,26 @@ name = "qem-auditor"
 version = "0.1.0"
 description = "An auditor for quantum error-mitigation claims: gates, verdicts, failure diagnosis, and experiment planning."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Venkat Allu", email = "alluvenkat11@gmail.com" }]
 keywords = ["quantum", "error-mitigation", "verification", "reproducibility", "qiskit"]
 classifiers = [
+    # Alpha, matching the `experimental` maturity this project declared to
+    # the Qiskit Ecosystem. Claiming Beta here and experimental there
+    # would be the same claim told two ways, which is the failure mode
+    # this package audits other people for.
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
 ]
 
 # The core has NO runtime dependencies, deliberately: the thing deciding
@@ -44,6 +61,9 @@ qem-auditor = "qem_auditor.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Venkatallu11/qem-auditor"
+Source = "https://github.com/Venkatallu11/qem-auditor"
+Issues = "https://github.com/Venkatallu11/qem-auditor/issues"
+"Qiskit Ecosystem" = "https://qisk.it/e"
 
 [tool.setuptools]
 packages = ["qem_auditor", "qem_auditor.adapters"]

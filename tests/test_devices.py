@@ -155,3 +155,75 @@ class BudgetTest(unittest.TestCase):
             as_of="2026-09", source="measured on my own bench this morning")
         budget = budget_for(mine, two_qubit_gates=10, measured_qubits=3)
         self.assertGreater(budget.share(ErrorSource.GATE_STOCHASTIC), 0)
+
+
+class MeasuredIonQCalibrationTest(unittest.TestCase):
+    """The two Forte profiles come from IonQ's calibration endpoint, and
+    the tiers trade rather than rank."""
+
+    def setUp(self):
+        self.forte = PROFILES["ionq_forte"]
+        self.enterprise = PROFILES["ionq_forte_enterprise"]
+
+    def test_both_carry_the_characterisation_date_not_a_month(self):
+        """A calibration figure without its date is a transcription."""
+        for profile in (self.forte, self.enterprise):
+            self.assertEqual(profile.as_of, "2026-08-09")
+            self.assertIn("get_latest_calibration", profile.source)
+
+    def test_enterprise_is_not_uniformly_better(self):
+        """2q fidelity 0.9909 against 0.9952, SPAM 0.9968 against 0.9939.
+        Nearly twice the gate error and noticeably better readout."""
+        self.assertGreater(self.enterprise.two_qubit_error,
+                           self.forte.two_qubit_error)
+        self.assertLess(self.enterprise.readout_error,
+                        self.forte.readout_error)
+        self.assertAlmostEqual(
+            self.enterprise.two_qubit_error / self.forte.two_qubit_error,
+            1.90, places=2)
+
+    def test_the_fidelities_round_trip(self):
+        """Stored as errors; these are the fidelities IonQ returned."""
+        self.assertAlmostEqual(1 - self.forte.two_qubit_error, 0.9952, places=4)
+        self.assertAlmostEqual(1 - self.enterprise.two_qubit_error, 0.9909,
+                               places=4)
+        self.assertAlmostEqual(1 - self.enterprise.readout_error, 0.9968,
+                               places=4)
+
+    def test_aria_is_left_as_an_estimate_on_purpose(self):
+        """Its calibration record returns a null 2q fidelity and a 1q
+        figure of 0.4745. An unusable measurement does not beat a stated
+        estimate, and the profile says so."""
+        self.assertIn("data-quality gap", PROFILES["ionq_aria"].source)
+
+    def test_the_swap_changes_magnitudes_but_not_the_real_runs_ranking(self):
+        """Checked rather than asserted: on the real 84-circuit run's
+        average circuit, gate error leads under both cards."""
+        from qem_auditor.prescribe import budget_from_calibration
+
+        tops = []
+        for profile in (self.forte, self.enterprise):
+            budget = budget_from_calibration(
+                one_qubit_gates=155, two_qubit_gates=11, measured_qubits=5,
+                shots=1100, one_qubit_error=profile.one_qubit_error,
+                two_qubit_error=profile.two_qubit_error,
+                readout_error=profile.readout_error)
+            tops.append(max(budget.contributions.items(),
+                            key=lambda kv: kv[1])[0])
+        self.assertEqual(tops[0], tops[1])
+
+    def test_the_swap_does_invert_it_on_a_shallow_wide_circuit(self):
+        """Which is the case the comment in devices.py claims, and the
+        case a first draft of that comment got wrong."""
+        from qem_auditor.prescribe import budget_from_calibration
+
+        tops = []
+        for profile in (self.forte, self.enterprise):
+            budget = budget_from_calibration(
+                one_qubit_gates=10, two_qubit_gates=3, measured_qubits=8,
+                shots=100_000, one_qubit_error=profile.one_qubit_error,
+                two_qubit_error=profile.two_qubit_error,
+                readout_error=profile.readout_error)
+            tops.append(max(budget.contributions.items(),
+                            key=lambda kv: kv[1])[0].name)
+        self.assertEqual(tops, ["READOUT", "GATE_STOCHASTIC"])

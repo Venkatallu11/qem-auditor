@@ -19,6 +19,24 @@ formula, including a 125-circuit job that came back at precisely 125.0x
 the one-circuit price -- which is what establishes that the minimum is
 per JOB and not per circuit.
 
+CHECKED AGAINST A BILL 150 TIMES LARGER
+---------------------------------------
+The card was built from two $25.79 jobs, which is a thin base for a
+formula. It has since been checked against the first full-scale run:
+81 circuits at 1,100 shots each, 12,582 one-qubit and 1,302 two-qubit
+gates in total, quoted by IonQ at **$3,882.21**. This formula gives
+**$3,875.29** -- 0.18% low, on a bill 150x bigger than the ones it came
+from.
+
+The $6.92 residual is NOT explained here, and is deliberately not
+explained away. Two hypotheses were checked and both failed: the rates
+had drifted slightly by then (1q +0.52%, 2q -0.74%), and applying the
+newer rates makes the agreement marginally WORSE, not better ($3,875.18).
+Whatever the remaining 0.18% is -- measurement gates, a rounding rule
+inside the estimator, a per-circuit term too small to see at one
+circuit -- it has not been identified, and a formula that is 0.18% low
+at this scale should be quoted as such rather than as exact.
+
 TWO REGIMES, AND THE ONE THAT MISLEADS
 --------------------------------------
 Below the minimum, shots are genuinely free: two real submissions of the
@@ -112,7 +130,23 @@ RATE_CARDS = {
                "125-circuit job at precisely 125.0x the one-circuit "
                "price, which is what shows the minimum is per job. Two "
                "real submissions at 100 and 500 shots both billed "
-               "$25.79, both under the floor"),
+               "$25.79, both under the floor. Checked again against an "
+               "81-circuit, 1,100-shot run quoted at $3,882.21: this "
+               "card gives $3,875.29, 0.18% low, residual unexplained"),
+    # The same rates re-measured two months later, from the same
+    # endpoint. Kept as a separate card rather than used to overwrite
+    # the first, because the drift is the point: a hardcoded rate card
+    # is a transcription, and this one moved 0.5-0.7% in two months.
+    # Neither card explains the 0.18% residual above, which is how we
+    # know the residual is not drift.
+    "ionq_forte_2026_10": RateCard(
+        job_minimum_usd=25.7899,
+        one_qubit_usd=0.00016484848484848546,
+        two_qubit_usd=0.001112727272727267,
+        as_of="2026-10",
+        source="IonQ GET /jobs/estimate for qpu.forte-1, re-measured two "
+               "months after the card above: 1q +0.52%, 2q -0.74%. Rates "
+               "move, so a pinned card needs its date read"),
 }
 
 
@@ -233,9 +267,12 @@ def circuits_for(method: str, *, qubits: int = 4, training: int = 5,
         "symmetry verification (post-selection)": MethodCost(
             "symmetry verification (post-selection)", 1, 0.90,
             "no extra circuits at all -- it discards shots rather than "
-            "submitting more. The 90% retention is measured: three real "
-            "trapped-ion circuits kept 91.5%, 90.2% and 90.1% of their "
-            "shots under an ancilla parity check"),
+            "submitting more. The 90% retention is measured, and has held "
+            "up as the sample grew: three real trapped-ion circuits kept "
+            "91.5/90.2/90.1%, six jobs spanning Aug-Sep kept 87.5-92.0%, "
+            "and the full 84-circuit run averaged 89.4% with a worst "
+            "circuit at 82.7%. The figure here stays 0.90 because that "
+            "is what four independent samples keep saying"),
     }
     if method not in table:
         raise KeyError(

@@ -160,15 +160,65 @@ PROFILES = {
         as_of="2026-08",
         source="representative published figures; all-to-all connectivity, "
                "gates ~1000x slower than superconducting and coherence "
-               "~10000x longer"),
+               "~10000x longer. Deliberately NOT updated from IonQ's "
+               "calibration endpoint: aria-1's latest record returns a null "
+               "2-qubit fidelity and a 1-qubit figure of 0.4745, which is a "
+               "data-quality gap rather than a system that loses half its "
+               "gates. aria-2's record is real but two years stale. An "
+               "unusable measurement does not beat a stated estimate"),
+    # MEASURED, not representative: IonQ's own calibration endpoint
+    # (get_latest_calibration), characterised 2026-08-09. The figures it
+    # returns are FIDELITIES, converted to errors here -- and the
+    # 2-qubit one came back at 0.9952, so the 0.004 this profile
+    # previously guessed was 20% optimistic.
+    #
+    # `readout_error` carries IonQ's SPAM fidelity, which is state
+    # preparation AND measurement together. It is the closest published
+    # quantity, it is not identical to readout error alone, and saying
+    # so is cheaper than quietly equating them.
     "ionq_forte": DeviceProfile(
         name="Forte", vendor="IonQ", architecture=Architecture.TRAPPED_ION,
-        two_qubit_error=0.004, readout_error=0.005, one_qubit_error=0.0002,
+        two_qubit_error=0.0048, readout_error=0.0061, one_qubit_error=0.0001,
         qubits=36, all_to_all=True, native_two_qubit="zz",
         t1_s=100.0, t2_s=1.0, two_qubit_gate_s=6e-4,
-        as_of="2026-08",
-        source="representative published figures; the family the source "
-               "project's own hardware runs were taken on"),
+        as_of="2026-08-09",
+        source="IonQ get_latest_calibration for qpu.forte-1, characterisation "
+               "date 2026-08-09: 2q fidelity 0.9952, 1q 0.9999, SPAM 0.9939. "
+               "readout_error is the SPAM figure, which includes preparation"),
+    # The machine the source project's full 84-circuit run actually ran
+    # on, and a profile worth having separately because "Enterprise" is
+    # NOT uniformly better. On the same characterisation date its
+    # 2-qubit fidelity is 0.9909 against forte-1's 0.9952 -- nearly
+    # twice the error -- while its SPAM is better, 0.9968 against
+    # 0.9939. The tiers trade; they do not rank.
+    #
+    # This matters for prescribing, but not everywhere, and the
+    # difference is worth stating precisely rather than dramatically.
+    # Swapping the cards scales gate error by 2.07x and readout by
+    # 0.52x. On a gate-heavy circuit that changes magnitudes and
+    # nothing else: the real 84-circuit run (155 one-qubit, 11
+    # two-qubit gates, 5 measured qubits) has GATE_STOCHASTIC on top
+    # under either card, and `prescribe` returns the same three methods
+    # in the same order.
+    #
+    # Where it DOES invert is shallow and wide -- few entangling
+    # gates, many measured qubits. At 2-8 two-qubit gates over 4-16
+    # measured qubits the top term flips from READOUT on forte-1 to
+    # GATE_STOCHASTIC on Forte Enterprise, which is the difference
+    # between being told to mitigate readout and being told to
+    # extrapolate. A first draft of this comment claimed the inversion
+    # for the gate-heavy case too; running it showed otherwise.
+    "ionq_forte_enterprise": DeviceProfile(
+        name="Forte Enterprise", vendor="IonQ",
+        architecture=Architecture.TRAPPED_ION,
+        two_qubit_error=0.0091, readout_error=0.0032, one_qubit_error=0.0003,
+        qubits=36, all_to_all=True, native_two_qubit="zz",
+        t1_s=100.0, t2_s=1.0, two_qubit_gate_s=6e-4,
+        as_of="2026-08-09",
+        source="IonQ get_latest_calibration for qpu.forte-enterprise-1, "
+               "characterisation date 2026-08-09: 2q fidelity 0.9909, 1q "
+               "0.9997, SPAM 0.9968. The backend of the real 84-circuit run "
+               "behind calibration.py"),
     "quantinuum_h2": DeviceProfile(
         name="H2", vendor="Quantinuum", architecture=Architecture.TRAPPED_ION,
         two_qubit_error=0.0015, readout_error=0.003, one_qubit_error=0.00003,
