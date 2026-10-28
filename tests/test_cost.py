@@ -266,3 +266,100 @@ class PricedAdviceTest(unittest.TestCase):
 
     def test_quote_for_an_unprescribed_method_is_absent_not_invented(self):
         self.assertIsNone(self.priced(500).quote_for("Pauli twirling"))
+
+
+class FullScaleBillTest(unittest.TestCase):
+    """The card was built from two $25.79 jobs. This is it against a bill
+    150 times larger."""
+
+    def setUp(self):
+        import json
+        from pathlib import Path
+        fixture = (Path(__file__).resolve().parent / "fixtures"
+                   / "ionq_full_run.json")
+        self.run = json.loads(fixture.read_text())["full_run"]
+        self.rates = RATE_CARDS["ionq_forte"]
+
+    def test_it_lands_within_a_fifth_of_a_percent(self):
+        quoted = self.run["cost_estimate_usd"]
+        ours = self.rates.quote(
+            circuits=self.run["circuits_submitted"],
+            one_qubit_gates=self.run["total_one_qubit_gates"]
+            // self.run["circuits_submitted"],
+            two_qubit_gates=self.run["total_two_qubit_gates"]
+            // self.run["circuits_submitted"],
+            shots=self.run["shots_per_circuit"])
+        self.assertAlmostEqual(quoted, 3882.21, places=2)
+        self.assertLess(abs(ours - quoted) / quoted, 0.01)
+
+    def test_the_exact_per_circuit_sum_is_point_one_eight_percent_low(self):
+        """Summed circuit by circuit rather than from an average, which
+        is how the $3,875.29 figure in the module docstring is got."""
+        total = (self.run["total_one_qubit_gates"] * self.rates.one_qubit_usd
+                 + self.run["total_two_qubit_gates"] * self.rates.two_qubit_usd
+                 ) * self.run["shots_per_circuit"]
+        self.assertAlmostEqual(total, 3875.29, places=2)
+        shortfall = (self.run["cost_estimate_usd"] - total)
+        self.assertAlmostEqual(shortfall, 6.92, places=2)
+        self.assertAlmostEqual(
+            shortfall / self.run["cost_estimate_usd"], 0.0018, places=4)
+
+    def test_the_newer_rates_do_not_explain_the_residual(self):
+        """Which is how we know the 0.18% is not rate drift. Applying the
+        rates measured two months later makes it marginally worse."""
+        newer = RATE_CARDS["ionq_forte_2026_10"]
+        with_newer = (self.run["total_one_qubit_gates"] * newer.one_qubit_usd
+                      + self.run["total_two_qubit_gates"] * newer.two_qubit_usd
+                      ) * self.run["shots_per_circuit"]
+        with_older = (self.run["total_one_qubit_gates"] * self.rates.one_qubit_usd
+                      + self.run["total_two_qubit_gates"] * self.rates.two_qubit_usd
+                      ) * self.run["shots_per_circuit"]
+        quoted = self.run["cost_estimate_usd"]
+        self.assertGreater(abs(with_newer - quoted), abs(with_older - quoted))
+
+    def test_the_rates_moved_between_measurements(self):
+        """A pinned rate card is a transcription. This one drifted."""
+        old, new = RATE_CARDS["ionq_forte"], RATE_CARDS["ionq_forte_2026_10"]
+        self.assertAlmostEqual(new.one_qubit_usd / old.one_qubit_usd - 1,
+                               0.0052, places=4)
+        self.assertAlmostEqual(new.two_qubit_usd / old.two_qubit_usd - 1,
+                               -0.0074, places=4)
+        self.assertNotEqual(old.as_of, new.as_of)
+
+    def test_a_run_this_size_is_nowhere_near_the_job_floor(self):
+        """The floor that dominated the first two $25.79 bills is
+        irrelevant here: across 81 circuits it covers single-digit shots,
+        against the 1,100 actually taken.
+
+        Computed from the run's AVERAGE circuit (155 one-qubit gates).
+        The lightest circuit in the run has 102 and gives 11 -- worth
+        keeping straight, because quoting a break-even from one circuit
+        and a total from all of them is the mix-up this suite exists to
+        catch elsewhere."""
+        per_circuit_1q = (self.run["total_one_qubit_gates"]
+                          // self.run["circuits_submitted"])
+        per_circuit_2q = (self.run["total_two_qubit_gates"]
+                          // self.run["circuits_submitted"])
+        self.assertEqual(per_circuit_1q, 155)
+        covered = self.rates.break_even_shots(per_circuit_1q, per_circuit_2q,
+                                              circuits=81)
+        self.assertEqual(covered, 8)
+        self.assertLess(covered, self.run["shots_per_circuit"] / 100)
+        # The lightest circuit, for contrast.
+        self.assertEqual(self.rates.break_even_shots(102, 11, circuits=81), 11)
+
+
+class RetentionTest(unittest.TestCase):
+
+    def test_the_retention_figure_matches_the_full_run(self):
+        """0.90 was set from three circuits. The 84-circuit run averaged
+        0.894, so the figure stands rather than being re-tuned."""
+        import json
+        from pathlib import Path
+        fixture = (Path(__file__).resolve().parent / "fixtures"
+                   / "ionq_full_run.json")
+        run = json.loads(fixture.read_text())["full_run"]
+        cost = circuits_for("symmetry verification (post-selection)")
+        self.assertAlmostEqual(run["mean_ancilla_retention"], 0.894, places=3)
+        self.assertAlmostEqual(cost.retained, run["mean_ancilla_retention"],
+                               delta=0.01)

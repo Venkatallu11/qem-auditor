@@ -46,6 +46,9 @@ from .devices import (PROFILES, Architecture, DeviceProfile, budget_for,
 from .results import (MitigatedEstimate, ResultsReport, ShotNoise, analyse,
                       shot_noise)
 from .counts import CountsError, CountsProblem, CountsReport, check_counts
+from .calibration import (CalibrationComparison, CalibrationError,
+                          ErrorBarAudit, GroupedCalibration, audit_against_truth,
+                          audit_groups, audit_residuals, compare_to_model)
 from .cost import (RATE_CARDS, Affordability, MethodCost, PricedAdvice,
                    Quote, RateCard, affordable_methods, circuits_for,
                    price_consult)

@@ -844,6 +844,103 @@ Validated against 2,500 resampled experiments: predicted amplification
 And it names what's missing rather than only what failed — *"submit
 counts at fold 3 and 5 and we can run ZNE"*, not *"ZNE unavailable"*.
 
+### Are your error bars the right size?
+
+Every other check here asks whether a result is believable *given* its
+stated uncertainty. `qem_auditor.calibration` asks the question
+underneath: **is the stated uncertainty honest?**
+
+That needs measurements whose true answers are known — benchmark
+circuits, Clifford circuits, a statevector cross-check. Where they
+exist, z = (measured − exact) / sigma should have mean 0 and variance 1,
+so chi-squared per degree of freedom should be 1.
+
+On the first full-scale real-hardware run behind this project — 84
+circuits on IonQ Forte Enterprise, 1,100 shots each, 732 residuals — it
+is **5.93**.
+
+```
+  732 residuals, 15 fitted parameter(s), 717 degrees of freedom
+  chi2/dof = 5.929        that is 46.0 sigma from 1.0
+  the quoted bars are 2.43x TOO TIGHT
+  the missing error is about 2.22x the quoted sigma, added in quadrature
+  coverage: 37.0% within 1 sigma (expect 68.3%), 81.3% within 3 (expect 99.7%)
+```
+
+Three things that module gets right because getting them wrong is easy:
+
+**Degrees of freedom are not the sample size.** 732 residuals carried 15
+fitted parameters. Dividing by n gives 5.81; dividing by n − p gives
+5.93. The wrong one is *lower* — the error is always in the flattering
+direction, so `fitted_parameters` is an argument and not an assumption.
+
+**Excess scatter and systematic bias are different failures.** One
+measurement group had mean z = −1.54 against an rms of 2.68 — a third of
+its excess was a *shift*, not noise. More shots fixes a shift never, and
+makes scatter look worse, not better. The module separates them.
+
+**One chi-squared over a mixed set says less than it looks like.** An
+*ideal, noiseless* rehearsal of the same circuits scored 7.28 — worse
+than the hardware — because three real hardware circuits had been reused
+inside it. Three points out of 84, from a different distribution, moved
+the headline past the hardware it was the baseline for. So
+`audit_groups` reports the parts next to the whole and names the one
+that dominates.
+
+The threshold for "dishonest" is **3 sigma, not 2**, and that was
+measured rather than chosen: chi-squared per dof concentrates as
+√(2/dof), so at 2,000 residuals a 2-sigma band is ±0.063 wide and
+ordinary sampling trips it one time in twenty-two. 2,000 genuinely
+Gaussian residuals came out at 0.929 and a 2-sigma rule called them
+dishonest. A module that accuses error bars cannot be wrong that often.
+
+### The run that bought all of this
+
+```bash
+python examples/audit_the_real_run.py     # no qiskit needed
+```
+
+IonQ Forte Enterprise, job `01a138e7`, 84 circuits, $3,882.21. The claim:
+a shared-frame correction takes the H4 energy error from 23.84 kcal/mol
+to **0.864** — inside chemical accuracy, a 27.6× improvement on real
+hardware.
+
+The auditor's answer is that the improvement is real and the chemical
+accuracy is not established:
+
+| | |
+|---|---|
+| point estimate | 0.864 kcal/mol — **inside** the 1.0 bar |
+| bootstrap (20 resamples) | 1.055 ± 0.419 — **mean is outside it** |
+| 90% of draws | [0.415, 1.866] — **straddles** the bar |
+| error bars | 2.43× too tight on top of that |
+
+*Chemical accuracy is consistent with this data; it is not established by
+it.* Both numbers are from the same run and they disagree about whether
+it passed — which is exactly what the eight-verdict lattice exists to
+say, instead of quoting the most flattering of three.
+
+And then the question anyone would ask next — *would more shots settle
+it?* The calibration audit already answered it:
+
+```
+     shots/circuit         cost    total bar   vs now
+             1,100  $  3,875.29        2.435   1.000x
+             4,400  $ 15,501.16        2.276   0.935x
+            17,600  $ 62,004.62        2.234   0.918x
+```
+
+**Sixteen times the shots — $62,005 — buys a bar 8.2% narrower.** Shot
+noise falls as 1/√N; the unmodelled term doesn't fall at all, and it is
+2.2× larger. The money cannot buy this claim. Finding the missing error
+can, and the systematic shift in group 0 is where to look.
+
+This section is also where the cost model got its real test. It was
+built from two $25.79 jobs; against this $3,882.21 quote it gives
+**$3,875.29**, 0.18% low. The $6.92 residual is *not* explained — and
+notably it isn't rate drift, because the rates re-measured two months
+later make the agreement slightly worse.
+
 ### A real trapped-ion job, and three things nobody checks
 
 The sister project reached real hardware: IonQ `qpu.forte-enterprise-1`,
