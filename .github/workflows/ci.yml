@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the suite can be re-run without inventing a commit to carry it.
+  # A maintainer re-running CI should not have to push anything, and an
+  # empty commit pushed to kick a build is a lie in the history.
+  workflow_dispatch:
 
 jobs:
   core:
