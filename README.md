@@ -844,6 +844,47 @@ Validated against 2,500 resampled experiments: predicted amplification
 And it names what's missing rather than only what failed — *"submit
 counts at fold 3 and 5 and we can run ZNE"*, not *"ZNE unavailable"*.
 
+### The two Forte tiers do not rank, they trade
+
+Three of the seven device profiles are now **measured**, not
+representative: IBM Eagle from the FakeKyiv snapshot, and both IonQ
+Forte tiers from IonQ's own `get_latest_calibration`, characterised
+2026-08-09.
+
+That replaced a guess with a measurement and corrected it:
+
+| | 2-qubit error | readout (SPAM) | source |
+|---|---|---|---|
+| previous guess | 0.0040 | 0.0050 | "representative published figures" |
+| **Forte** (measured) | 0.0048 | 0.0061 | fidelity 0.9952 / SPAM 0.9939 |
+| **Forte Enterprise** (measured) | **0.0091** | **0.0032** | fidelity 0.9909 / SPAM 0.9968 |
+
+**Forte Enterprise — the machine the real run used — has nearly twice
+the two-qubit error of plain Forte, and better readout.** Characterised
+the same day. The tier that sounds better is worse at the thing that
+usually dominates, which is exactly why a profile needs a source and a
+date rather than a vendor's adjective.
+
+One caution carried in the code rather than smoothed over: IonQ reports
+**SPAM** fidelity, which is state preparation *and* measurement. It is
+the closest published quantity to our `readout_error`, it is not
+identical, and the profile says so.
+
+Aria was deliberately *not* updated from the same endpoint. Its latest
+record returns a null 2-qubit fidelity and a 1-qubit figure of 0.4745 —
+a data-quality gap, not a machine that loses half its gates. **An
+unusable measurement does not beat a stated estimate**, and the profile
+records why it stayed an estimate.
+
+Does the swap change advice? A first draft of that comment said it
+inverts the ZNE-versus-readout ranking. Running it showed otherwise: on
+the real run's own circuit (155 one-qubit, 11 two-qubit gates) gate
+error leads under *either* card and the prescription is identical. The
+inversion is real but lives elsewhere — shallow and wide, 2–8 entangling
+gates across 4–16 measured qubits, where the top term flips from readout
+to gate error between the two tiers. Both the true case and the
+corrected claim are pinned by tests.
+
 ### Are your error bars the right size?
 
 Every other check here asks whether a result is believable *given* its
@@ -1160,11 +1201,12 @@ record said 120 gates had executed. Cost is charged per executed gate per
 shot, so it was quoting for a circuit the machine never ran. A test now
 pins the executed counts as the ones that win.
 
-### Six machines, and what honestly changes between them
+### Seven machines, three of them measured
 
 This project spent its whole life calibrated against one IBM Eagle chip.
 `qem_auditor.devices` carries profiles for **IBM** (Eagle, Heron),
-**IonQ** (Aria, Forte), **Quantinuum** (H2) and **Rigetti** (Ankaa-3),
+**IonQ** (Aria, Forte, Forte Enterprise), **Quantinuum** (H2) and
+**Rigetti** (Ankaa-3),
 across superconducting and trapped-ion architectures — and running the
 same circuit on all six produced a finding I did not expect.
 

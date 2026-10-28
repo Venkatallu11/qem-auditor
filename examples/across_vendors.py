@@ -1,4 +1,4 @@
-"""The same circuit on six machines, and what actually changes.
+"""The same circuit on seven machines, and what actually changes.
 
 This project was calibrated against one IBM Eagle chip. That was a
 reasonable place to start and a bad place to stop, so this runs the same
@@ -62,7 +62,7 @@ def table(title, two_qubit_gates, measured_qubits):
 
 def main() -> int:
     print("=" * 78)
-    print("  The same circuit, six machines")
+    print("  The same circuit, seven machines")
     print("=" * 78)
     for device in DEVICES:
         print("  " + device.describe().replace("\n", "\n  "))
@@ -84,7 +84,7 @@ def main() -> int:
     rows = table("  2. At most shapes, every machine agrees on what hurts",
                  two_qubit_gates=60, measured_qubits=4)
     dominants = {str(row["dominant"]) for row in rows} - {"None"}
-    print(f"\n  distinct dominant sources across six machines: {len(dominants)}")
+    print(f"\n  distinct dominant sources across seven machines: {len(dominants)}")
     print("  -> the circuit's shape decided this, not the vendor")
 
     rows = table("  3. Shallow and wide is where the LIMIT differs",
@@ -117,9 +117,30 @@ def main() -> int:
     print("    readout mitigation on the readout-heavy machines, ZNE elsewhere.")
 
     print("\n" + "=" * 78)
-    print("  These are dated, representative figures for comparing")
+    # Not all of these are the same KIND of number, and flattening that
+    # would be the quiet over-claim this file ends by warning about.
+    # Classified by what the profile says of ITSELF -- an estimate
+    # declares itself representative -- rather than by matching the
+    # name of one vendor's endpoint, which mislabelled IBM Eagle's
+    # snapshot as an estimate on the first attempt.
+    estimates = [p for p in PROFILES.values()
+                 if "representative" in p.source]
+    measured = [p for p in PROFILES.values()
+                if "representative" not in p.source]
+    if measured:
+        print(f"  {len(measured)} of these {len(PROFILES)} are MEASURED, each "
+              "from a vendor source on a stated date:")
+        for profile in measured:
+            print(f"    {profile.vendor} {profile.name} ({profile.as_of})")
+    print(f"  The other {len(estimates)} are dated, representative figures "
+          "for comparing")
     print("  architectures -- not measurements of the machine you are about")
     print("  to run on. Bring your own calibration with profile.replace().")
+    print()
+    print("  And a measured pair is worth reading closely: IonQ Forte and")
+    print("  Forte Enterprise were characterised on the SAME day, and the")
+    print("  Enterprise tier has nearly twice the two-qubit error with")
+    print("  better readout. The tiers trade; they do not rank.")
     print("=" * 78)
     return 0
 
